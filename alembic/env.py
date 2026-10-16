@@ -36,6 +36,8 @@ if not current_url or current_url.startswith("driver:"):
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode."""
     url = config.get_main_option("sqlalchemy.url")
+    if url and "+asyncpg" in url:
+        url = url.replace("+asyncpg", "")
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -56,6 +58,11 @@ def do_run_migrations(connection: Connection) -> None:
 
 async def run_async_migrations() -> None:
     """Run migrations in 'online' mode with async connection."""
+    url = config.get_main_option("sqlalchemy.url")
+    if url and url.startswith("sqlite://") and not url.startswith("sqlite+aiosqlite://"):
+        url = url.replace("sqlite://", "sqlite+aiosqlite://", 1)
+        config.set_main_option("sqlalchemy.url", url)
+
     connectable = async_engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",

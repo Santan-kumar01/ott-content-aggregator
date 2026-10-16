@@ -13,13 +13,7 @@ from src.models.user import User  # Registers the model
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Temporary development setup.
-    # Alembic migrations will replace create_all.
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
-
     yield
-
     await engine.dispose()
 
 

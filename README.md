@@ -150,31 +150,112 @@ CREATE DATABASE ott_db OWNER postgres;
 
 ---
 
-### 5. Database Migrations
+### 5. Database Migrations & Schema Management
 
-Apply existing Alembic migrations to set up the database schema (`titles` and `users` tables):
+Schema management is handled exclusively through **Alembic**.
+
+#### Path A: Fresh Database Setup
+
+For a newly created database with no existing tables:
 
 ```powershell
 alembic upgrade head
 ```
 
+This applies migrations `0001` (titles catalog) and `0002` (user authentication) in sequence, creating all required tables, columns, primary keys, and indexes.
+
+---
+
+#### Path B: Adopting Pre-Existing Databases (Tables Created Outside Alembic)
+
+If your database already contains tables (e.g., created during earlier development or via legacy scripts), follow this safe adoption workflow:
+
+##### Step 1: Create a Full Database Backup
+
+Always take a complete backup before running migrations or altering production databases:
+
+```powershell
+# Using Docker
+docker exec -t ott-postgres pg_dump -U postgres -d ott_db -F c -b -v -f /tmp/ott_db_backup.dump
+docker cp ott-postgres:/tmp/ott_db_backup.dump ./ott_db_backup.dump
+
+# Using Native PostgreSQL
+pg_dump -U postgres -d ott_db -F c -b -v -f "ott_db_backup.dump"
+```
+
+##### Step 2: Schema Compatibility Verification & Adoption
+
+Our migration scripts (`0001_initial_titles.py` and `0002_add_user_model.py`) feature **strict schema validation**:
+- When pre-existing tables are encountered, the migrations inspect all existing columns, types, nullability, and primary key constraints.
+- If required columns or constraints are missing or incompatible, the migration **aborts immediately** with a descriptive error message indicating the exact missing elements, preventing silent database corruption.
+- If the schema is compatible, the migration safely adopts the existing tables, preserves all existing data, and provisions any missing performance indexes (such as `ix_titles_*` and `ix_users_*`).
+
+To adopt and validate the pre-existing database, simply run:
+
+```powershell
+alembic upgrade head
+```
+
+##### Step 3: Baseline Stamping (Alternative)
+
+If you have already independently audited and verified that your database matches the current schema state, you can stamp the database at the target revision:
+
+```powershell
+# Stamp as fully migrated to head (revision 0002)
+alembic stamp head
+```
+
+> [!WARNING]
+> **Never blindly stamp an unverified database.** Stamping marks a revision as applied in `alembic_version` without executing schema checks or creating missing indexes. Always verify your database schema matches `src/models/` before stamping.
+
+---
+
+#### Downgrade Safety & Data Protection
+
+To guard against catastrophic accidental data loss:
+- Both `0001` and `0002` downgrade handlers check whether tables contain data before dropping them.
+- If any data rows exist in the table, **downgrade is immediately aborted** with a `RuntimeError`:
+  ```text
+  Downgrade aborted: Table 'users' contains data. Refusing to drop table during rollback to prevent accidental data loss.
+  ```
+- **Explicit Override**: If you intentionally wish to destroy the table and all contained data during development or testing, you must explicitly opt in by setting the environment variable:
+  - **Windows (PowerShell):**
+    ```powershell
+    $env:ALLOW_DESTRUCTIVE_DOWNGRADE = "1"
+    alembic downgrade -1
+    ```
+  - **Linux / macOS:**
+    ```bash
+    ALLOW_DESTRUCTIVE_DOWNGRADE=1 alembic downgrade -1
+    ```
+
+> [!IMPORTANT]
+> **Migration Limitations & Irreversible Baseline**:
+> Relational databases do not automatically track table provenance (whether a table was originally created by an earlier Alembic run or adopted from a legacy schema). Revision `0001` represents the foundational baseline of the application. Downgrading the baseline removes the core database schema. Always take a verified database backup prior to performing any schema downgrade in non-ephemeral environments.
+
+---
+
 #### Common Alembic Commands
 
-- **Check current revision:**
+- **Check current applied revision:**
   ```powershell
   alembic current
   ```
-- **Check for schema drift:**
+- **Check for schema drift against SQLAlchemy models:**
   ```powershell
   alembic check
   ```
-- **Roll back the last migration:**
+- **View migration history:**
   ```powershell
-  alembic downgrade -1
+  alembic history --verbose
   ```
-- **Generate a new migration:**
+- **Generate SQL script for dry-run inspection (offline mode):**
   ```powershell
-  alembic revision --autogenerate -m "description of changes"
+  alembic upgrade head --sql
+  ```
+- **Generate a new autodetected migration:**
+  ```powershell
+  alembic revision --autogenerate -m "description_of_changes"
   ```
 
 ---
