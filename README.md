@@ -1,79 +1,442 @@
 # OTT Content Aggregator API
 
-A RESTful API built using FastAPI and PostgreSQL to manage and search movies and web series.
+A high-performance, asynchronous RESTful API built with **FastAPI**, **SQLAlchemy 2.0**, and **PostgreSQL** to aggregate, manage, and search movies and web series across multiple streaming platforms.
+
+---
 
 ## Features
 
-- Create, read, update, and delete titles (CRUD)
-- Filter titles by genre, release year, and platform
-- Input validation using Pydantic
-- PostgreSQL integration with SQLAlchemy
-- Interactive API documentation using Swagger UI
+- **Title Catalog Management**: Full CRUD operations for movies and series with metadata (genres, release year, director, cast, platform availability).
+- **Advanced Filtering**: Filter titles by genre, release year, language, rating, and streaming platform.
+- **JWT Authentication & Security**: Secure user registration, OAuth2 password flow login, cryptographically hashed passwords with `bcrypt`, and stateless JWT tokens.
+- **Protected Write Endpoints**: Title modifications (create, update, delete) are protected by Bearer authentication, while catalog browsing remains publicly accessible.
+- **Asynchronous Database Access**: Built on SQLAlchemy 2.0 with the `asyncpg` PostgreSQL driver for high concurrency.
+- **Database Migrations**: Version-controlled schema migrations with **Alembic**.
+- **Caching**: Redis integration for accelerated query performance.
+- **Interactive Documentation**: Auto-generated Swagger UI and ReDoc OpenAPI specifications.
+- **Comprehensive Test Suite**: Automated unit and integration tests using `pytest` and `httpx`.
+
+---
 
 ## Tech Stack
 
-- Python
-- FastAPI
-- PostgreSQL
-- SQLAlchemy
-- Pydantic
-- Pytest
+- **Framework**: [FastAPI](https://fastapi.tiangolo.com/) (Python 3.10+)
+- **ASGI Server**: [Uvicorn](https://www.uvicorn.org/)
+- **Database**: [PostgreSQL 16+](https://www.postgresql.org/)
+- **ORM & Database Driver**: [SQLAlchemy 2.0](https://www.sqlalchemy.org/) & [asyncpg](https://github.com/MagicStack/asyncpg)
+- **Migrations**: [Alembic](https://alembic.sqlalchemy.org/)
+- **Validation & Settings**: [Pydantic v2](https://docs.pydantic.dev/) & [pydantic-settings](https://docs.pydantic.dev/latest/concepts/pydantic_settings/)
+- **Security & Auth**: [python-jose](https://github.com/mpdavis/python-jose), [passlib](https://passlib.readthedocs.io/), and [bcrypt](https://github.com/pyca/bcrypt)
+- **Cache**: [Redis](https://redis.io/)
+- **Testing**: [pytest](https://docs.pytest.org/), [pytest-asyncio](https://github.com/pytest-dev/pytest-asyncio), [HTTPX](https://www.python-httpx.org/), and [aiosqlite](https://github.com/omnilib/aiosqlite)
 
-## Installation
+---
 
-### 1. Clone the repository
+## Getting Started
+
+### 1. Prerequisites
+
+- Python 3.10 or higher
+- Docker Desktop (recommended for PostgreSQL and Redis) or locally installed PostgreSQL and Redis instances
+- Git
+
+---
+
+### 2. Installation
+
+#### Clone the Repository
 
 ```bash
 git clone https://github.com/Santan-kumar01/ott-content-aggregator.git
 cd ott-content-aggregator
 ```
 
-### 2. Create a virtual environment
+#### Set Up Virtual Environment
+
+- **On Windows (PowerShell):**
+  ```powershell
+  python -m venv .venv
+  .\.venv\Scripts\Activate.ps1
+  ```
+
+- **On macOS / Linux:**
+  ```bash
+  python3 -m venv .venv
+  source .venv/bin/activate
+  ```
+
+#### Install Dependencies
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-```
-
-### 3. Install dependencies
-
-```powershell
+python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-### 4. Configure environment variables
+---
 
-Copy `.env.example` to `.env` and configure your local PostgreSQL credentials and a strong JWT secret.
+### 3. Environment Configuration
 
-Never upload your `.env` file or secrets to GitHub.
+Copy the example environment file to `.env`:
 
-### 5. Run the application
+- **Windows PowerShell:**
+  ```powershell
+  Copy-Item .env.example .env
+  ```
+- **macOS / Linux:**
+  ```bash
+  cp .env.example .env
+  ```
+
+Generate a secure, random 32-byte secret key for JWT signing:
 
 ```powershell
-uvicorn src.main:app --reload
+python -c "import secrets; print(secrets.token_hex(32))"
 ```
 
-## API Documentation
+Open `.env` and set your credentials:
 
-Once the application is running:
+```dotenv
+# Database Connection (PostgreSQL asyncpg driver)
+DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/ott_db
 
-- Swagger UI: http://127.0.0.1:8000/docs
-- Health Check: http://127.0.0.1:8000/health
+# Security & Authentication
+JWT_SECRET_KEY=<paste_generated_32_byte_secret_here>
+JWT_ALGORITHM=HS256
+ACCESS_TOKEN_EXPIRE_MINUTES=30
 
-## API Endpoints
+# Redis Cache
+REDIS_URL=redis://localhost:6379/0
+```
 
-| Method | Endpoint | Description |
-|---|---|---|
-| POST | `/api/v1/titles/` | Create a title |
-| GET | `/api/v1/titles/` | List and filter titles |
-| GET | `/api/v1/titles/{title_id}` | Retrieve a title |
-| PATCH | `/api/v1/titles/{title_id}` | Update a title |
-| DELETE | `/api/v1/titles/{title_id}` | Delete a title |
+> [!CAUTION]
+> Never commit `.env` or expose real passwords and JWT secret keys in version control.
 
-## Team Collaboration
+---
 
-Team members should work on separate feature branches and create Pull Requests for review before merging into `main`.
+### 4. Database Setup
 
-## License
+#### Using Docker (Recommended)
 
-Educational and internship project.
+Start a PostgreSQL 16 container with a persistent named volume:
+
+```powershell
+docker run -d `
+  --name ott-postgres `
+  -e POSTGRES_USER=postgres `
+  -e POSTGRES_PASSWORD=postgres `
+  -e POSTGRES_DB=ott_db `
+  -p 5432:5432 `
+  -v ott_postgres_data:/var/lib/postgresql/data `
+  postgres:16-alpine
+```
+
+*(Optional)* Start a Redis container for caching:
+
+```powershell
+docker run -d `
+  --name ott-redis `
+  -p 6379:6379 `
+  redis:7-alpine
+```
+
+#### Using Native PostgreSQL
+
+If using a local PostgreSQL service, create the database user and database:
+
+```sql
+CREATE USER postgres WITH PASSWORD 'postgres';
+CREATE DATABASE ott_db OWNER postgres;
+```
+
+---
+
+### 5. Database Migrations & Schema Management
+
+Schema management is handled exclusively through **Alembic**.
+
+#### Path A: Fresh Database Setup
+
+For a newly created database with no existing tables:
+
+```powershell
+alembic upgrade head
+```
+
+This applies migrations `0001` (titles catalog) and `0002` (user authentication) in sequence, creating all required tables, columns, primary keys, and indexes.
+
+---
+
+#### Path B: Adopting Pre-Existing Databases (Tables Created Outside Alembic)
+
+If your database already contains tables (e.g., created during earlier development or via legacy scripts), follow this safe adoption workflow:
+
+##### Step 1: Create a Full Database Backup
+
+Always take a complete backup before running migrations or altering production databases:
+
+```powershell
+# Using Docker
+docker exec -t ott-postgres pg_dump -U postgres -d ott_db -F c -b -v -f /tmp/ott_db_backup.dump
+docker cp ott-postgres:/tmp/ott_db_backup.dump ./ott_db_backup.dump
+
+# Using Native PostgreSQL
+pg_dump -U postgres -d ott_db -F c -b -v -f "ott_db_backup.dump"
+```
+
+##### Step 2: Schema Compatibility Verification & Adoption
+
+Our migration scripts (`0001_initial_titles.py` and `0002_add_user_model.py`) feature **strict schema validation**:
+- When pre-existing tables are encountered, the migrations inspect all existing columns, types, nullability, and primary key constraints.
+- If required columns or constraints are missing or incompatible, the migration **aborts immediately** with a descriptive error message indicating the exact missing elements, preventing silent database corruption.
+- If the schema is compatible, the migration safely adopts the existing tables, preserves all existing data, and provisions any missing performance indexes (such as `ix_titles_*` and `ix_users_*`).
+
+To adopt and validate the pre-existing database, simply run:
+
+```powershell
+alembic upgrade head
+```
+
+##### Step 3: Baseline Stamping (Alternative)
+
+If you have already independently audited and verified that your database matches the current schema state, you can stamp the database at the target revision:
+
+```powershell
+# Stamp as fully migrated to head (revision 0002)
+alembic stamp head
+```
+
+> [!WARNING]
+> **Never blindly stamp an unverified database.** Stamping marks a revision as applied in `alembic_version` without executing schema checks or creating missing indexes. Always verify your database schema matches `src/models/` before stamping.
+
+---
+
+#### Downgrade Safety & Data Protection
+
+To guard against catastrophic accidental data loss:
+- Both `0001` and `0002` downgrade handlers check whether tables contain data before dropping them.
+- If any data rows exist in the table, **downgrade is immediately aborted** with a `RuntimeError`:
+  ```text
+  Downgrade aborted: Table 'users' contains data. Refusing to drop table during rollback to prevent accidental data loss.
+  ```
+- **Explicit Override**: If you intentionally wish to destroy the table and all contained data during development or testing, you must explicitly opt in by setting the environment variable:
+  - **Windows (PowerShell):**
+    ```powershell
+    $env:ALLOW_DESTRUCTIVE_DOWNGRADE = "1"
+    alembic downgrade -1
+    ```
+  - **Linux / macOS:**
+    ```bash
+    ALLOW_DESTRUCTIVE_DOWNGRADE=1 alembic downgrade -1
+    ```
+
+> [!IMPORTANT]
+> **Migration Limitations & Irreversible Baseline**:
+> Relational databases do not automatically track table provenance (whether a table was originally created by an earlier Alembic run or adopted from a legacy schema). Revision `0001` represents the foundational baseline of the application. Downgrading the baseline removes the core database schema. Always take a verified database backup prior to performing any schema downgrade in non-ephemeral environments.
+
+---
+
+#### Common Alembic Commands
+
+- **Check current applied revision:**
+  ```powershell
+  alembic current
+  ```
+- **Check for schema drift against SQLAlchemy models:**
+  ```powershell
+  alembic check
+  ```
+- **View migration history:**
+  ```powershell
+  alembic history --verbose
+  ```
+- **Generate SQL script for dry-run inspection (offline mode):**
+  ```powershell
+  alembic upgrade head --sql
+  ```
+- **Generate a new autodetected migration:**
+  ```powershell
+  alembic revision --autogenerate -m "description_of_changes"
+  ```
+
+---
+
+### 6. Running the API
+
+Start the local development server with auto-reload:
+
+```powershell
+python -m uvicorn src.main:app --reload
+```
+
+The API will be available at:
+- **Base URL**: `http://127.0.0.1:8000`
+- **Interactive Swagger UI**: `http://127.0.0.1:8000/docs`
+- **ReDoc Documentation**: `http://127.0.0.1:8000/redoc`
+- **Health Check**: `http://127.0.0.1:8000/health`
+
+---
+
+## Authentication Workflow & Protected Endpoints
+
+### 1. Register a New User
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/auth/register" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "user@example.com",
+    "username": "ottuser",
+    "password": "StrongPassword123!"
+  }'
+```
+
+**Response (`201 Created`):**
+```json
+{
+  "id": 1,
+  "email": "user@example.com",
+  "username": "ottuser",
+  "is_active": true,
+  "is_superuser": false,
+  "created_at": "2026-10-16T10:00:00"
+}
+```
+
+---
+
+### 2. Log In & Obtain Access Token
+
+Login supports both OAuth2 form data (used by Swagger UI "Authorize" button) and JSON:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/auth/login" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "username=user@example.com&password=StrongPassword123!"
+```
+
+**Response (`200 OK`):**
+```json
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "token_type": "bearer"
+}
+```
+
+---
+
+### 3. Verify Current User Profile
+
+```bash
+curl -X GET "http://127.0.0.1:8000/api/v1/auth/me" \
+  -H "Authorization: Bearer <access_token>"
+```
+
+**Response (`200 OK`):**
+```json
+{
+  "id": 1,
+  "email": "user@example.com",
+  "username": "ottuser",
+  "is_active": true,
+  "is_superuser": false,
+  "created_at": "2026-10-16T10:00:00"
+}
+```
+
+---
+
+### 4. Public vs. Protected Title Endpoints
+
+#### Public Access: Browse Catalog (No Token Required)
+
+```bash
+curl -X GET "http://127.0.0.1:8000/api/v1/titles/"
+```
+
+#### Protected Access: Create a Title (Bearer Token Required)
+
+Unauthenticated requests to write endpoints return `401 Unauthorized`. To create a title, supply the Bearer token:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/titles/" \
+  -H "Authorization: Bearer <access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Inception",
+    "type": "Movie",
+    "director": "Christopher Nolan",
+    "cast": ["Leonardo DiCaprio", "Joseph Gordon-Levitt", "Elliot Page"],
+    "genres": ["Sci-Fi", "Action"],
+    "release_year": 2010,
+    "available_platforms": ["Netflix", "Amazon Prime"]
+  }'
+```
+
+Similarly, updating (`PUT /api/v1/titles/{id}`) and deleting (`DELETE /api/v1/titles/{id}`) require the Bearer token.
+
+---
+
+## API Endpoints Reference
+
+| Method | Endpoint | Access | Description |
+|---|---|---|---|
+| `GET` | `/health` | Public | Application health check |
+| `POST` | `/api/v1/auth/register` | Public | Register a new user |
+| `POST` | `/api/v1/auth/login` | Public | Authenticate and obtain JWT token |
+| `GET` | `/api/v1/auth/me` | Protected | Get profile of authenticated user |
+| `GET` | `/api/v1/titles/` | Public | List and filter titles |
+| `GET` | `/api/v1/titles/{id}` | Public | Retrieve a title by ID |
+| `POST` | `/api/v1/titles/` | Protected | Create a new title |
+| `PUT` | `/api/v1/titles/{id}` | Protected | Update an existing title |
+| `DELETE` | `/api/v1/titles/{id}` | Protected | Delete a title |
+
+---
+
+## Running Tests
+
+Run the complete test suite:
+
+```powershell
+python -m pytest
+```
+
+To run with verbose output and test names:
+
+```powershell
+python -m pytest -v
+```
+
+The test suite runs against an isolated async SQLite test database (`aiosqlite`), ensuring fast, reliable, and side-effect-free execution without depending on external network services.
+
+---
+
+## Project Structure
+
+```text
+ott-content-aggregator/
+├── alembic/                      # Alembic database migrations
+│   ├── versions/                 # Migration scripts (0001, 0002)
+│   └── env.py                    # Async migration runner environment
+├── src/
+│   ├── api/
+│   │   ├── dependencies/         # Dependency injection (database, auth)
+│   │   └── endpoints/            # Route controllers (titles, auth)
+│   ├── core/                     # Application configuration & security
+│   ├── models/                   # SQLAlchemy 2.0 ORM models (Title, User)
+│   ├── schemas/                  # Pydantic v2 validation models
+│   ├── services/                 # Business logic & repository layers
+│   └── main.py                   # FastAPI application factory & lifespan
+├── tests/                        # Comprehensive pytest suite
+├── .env.example                  # Environment configuration template
+├── alembic.ini                   # Alembic configuration
+├── requirements.txt              # Production and development dependencies
+└── README.md                     # Project documentation
+```
+
+---
+
+## Team Collaboration & Workflow
+
+- Feature development occurs on dedicated topic branches (e.g., `feat/authentication`).
+- Pull requests are reviewed and verified via automated test suites prior to merging into `main`.
+- Direct pushes or commits to `main` are restricted.
