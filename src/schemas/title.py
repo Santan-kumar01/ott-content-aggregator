@@ -46,3 +46,10 @@ class TitleRead(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+class PaginatedTitleRead(BaseModel):
+    items: list[TitleRead]
+    total: int
+    skip: int
+    limit: int
+    has_next: bool

@@ -1,3 +1,4 @@
+
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -6,7 +7,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.api.endpoints.auth import get_current_user
 from src.core.database import get_db
 from src.models.user import User
-from src.schemas.title import TitleCreate, TitleRead, TitleUpdate
+from src.schemas.title import (
+    PaginatedTitleRead,
+    TitleCreate,
+    TitleRead,
+    TitleUpdate,
+)
 from src.services import catalog_service
 
 router = APIRouter(prefix="/titles", tags=["Catalog"])
@@ -49,11 +55,45 @@ async def list_titles(
     )
 
 
+@router.get("/paginated", response_model=PaginatedTitleRead)
+async def list_titles_paginated(
+    db: DBSession,
+    genre: str | None = None,
+    platform: str | None = None,
+    release_year: int | None = Query(
+        default=None, ge=1888, le=2100
+    ),
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=100),
+):
+    items, total = await catalog_service.list_titles_paginated(
+        db,
+        genre=genre,
+        platform=platform,
+        release_year=release_year,
+        skip=skip,
+        limit=limit,
+    )
+
+    return {
+        "items": items,
+        "total": total,
+        "skip": skip,
+        "limit": limit,
+        "has_next": skip + len(items) < total,
+    }
+
+
 @router.get("/{title_id}", response_model=TitleRead)
 async def get_title(title_id: int, db: DBSession):
     title = await catalog_service.get_title(db, title_id)
+
     if title is None:
-        raise HTTPException(status_code=404, detail="Title not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Title not found",
+        )
+
     return title
 
 
@@ -65,18 +105,31 @@ async def update_title(
     current_user: CurrentUser,
 ):
     title = await catalog_service.get_title(db, title_id)
+
     if title is None:
-        raise HTTPException(status_code=404, detail="Title not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Title not found",
+        )
+
     return await catalog_service.update_title(db, title, data)
 
 
-@router.delete("/{title_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{title_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
 async def delete_title(
     title_id: int,
     db: DBSession,
     current_user: CurrentUser,
 ):
     title = await catalog_service.get_title(db, title_id)
+
     if title is None:
-        raise HTTPException(status_code=404, detail="Title not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Title not found",
+        )
+
     await catalog_service.delete_title(db, title)

@@ -129,3 +129,143 @@ async def test_unknown_title_returns_404(client: AsyncClient):
     response = await client.get("/api/v1/titles/999999")
 
     assert response.status_code == 404
+
+@pytest.mark.anyio
+async def test_paginated_titles_empty_result(client: AsyncClient):
+    response = await client.get("/api/v1/titles/paginated")
+
+    assert response.status_code == 200, response.text
+
+    data = response.json()
+    assert data["items"] == []
+    assert data["total"] == 0
+    assert data["skip"] == 0
+    assert data["limit"] == 20
+    assert data["has_next"] is False
+
+
+@pytest.mark.anyio
+async def test_paginated_titles_returns_total_and_has_next(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+):
+    titles = [
+        {
+            "name": f"Pagination Movie {i}",
+            "description": "Pagination test",
+            "content_type": "movie",
+            "release_year": 2020 + i,
+            "genre": "Drama",
+            "platform": "Netflix",
+        }
+        for i in range(3)
+    ]
+
+    for title in titles:
+        response = await client.post(
+            "/api/v1/titles",
+            json=title,
+            headers=auth_headers,
+        )
+        assert response.status_code == 201, response.text
+
+    response = await client.get(
+        "/api/v1/titles/paginated?skip=0&limit=2"
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+
+    assert len(data["items"]) == 2
+    assert data["total"] == 3
+    assert data["skip"] == 0
+    assert data["limit"] == 2
+    assert data["has_next"] is True
+
+
+@pytest.mark.anyio
+async def test_paginated_titles_last_page_has_no_next(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+):
+    for i in range(2):
+        response = await client.post(
+            "/api/v1/titles",
+            json={
+                "name": f"Last Page Movie {i}",
+                "description": "Last page test",
+                "content_type": "movie",
+                "release_year": 2020,
+                "genre": "Drama",
+                "platform": "Netflix",
+            },
+            headers=auth_headers,
+        )
+        assert response.status_code == 201, response.text
+
+    response = await client.get(
+        "/api/v1/titles/paginated?skip=1&limit=1"
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+
+    assert len(data["items"]) == 1
+    assert data["total"] == 2
+    assert data["has_next"] is False
+
+
+@pytest.mark.anyio
+async def test_paginated_titles_filters_by_genre(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+):
+    for name, genre in [
+        ("Drama Movie", "Drama"),
+        ("Comedy Movie", "Comedy"),
+    ]:
+        response = await client.post(
+            "/api/v1/titles",
+            json={
+                "name": name,
+                "description": "Genre filter test",
+                "content_type": "movie",
+                "release_year": 2024,
+                "genre": genre,
+                "platform": "Netflix",
+            },
+            headers=auth_headers,
+        )
+        assert response.status_code == 201, response.text
+
+    response = await client.get(
+        "/api/v1/titles/paginated?genre=Drama"
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+
+    assert data["total"] == 1
+    assert len(data["items"]) == 1
+    assert data["items"][0]["genre"] == "Drama"
+
+
+@pytest.mark.anyio
+async def test_paginated_titles_invalid_pagination_parameters(
+    client: AsyncClient,
+):
+    response = await client.get(
+        "/api/v1/titles/paginated?skip=-1"
+    )
+    assert response.status_code == 422
+
+    response = await client.get(
+        "/api/v1/titles/paginated?limit=0"
+    )
+    assert response.status_code == 422
+
+    response = await client.get(
+        "/api/v1/titles/paginated?limit=101"
+    )
+    assert response.status_code == 422
+

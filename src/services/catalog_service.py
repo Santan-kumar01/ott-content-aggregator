@@ -1,5 +1,5 @@
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.title import Title
@@ -7,7 +7,8 @@ from src.schemas.title import TitleCreate, TitleUpdate
 
 
 async def create_title(
-    db: AsyncSession, data: TitleCreate
+    db: AsyncSession,
+    data: TitleCreate,
 ) -> Title:
     title = Title(**data.model_dump())
     db.add(title)
@@ -36,12 +37,53 @@ async def list_titles(
         query = query.where(Title.release_year == release_year)
 
     query = query.order_by(Title.id).offset(skip).limit(limit)
+
     result = await db.scalars(query)
     return list(result.all())
 
 
+async def list_titles_paginated(
+    db: AsyncSession,
+    genre: str | None = None,
+    platform: str | None = None,
+    release_year: int | None = None,
+    skip: int = 0,
+    limit: int = 20,
+) -> tuple[list[Title], int]:
+    filters = []
+
+    if genre:
+        filters.append(Title.genre.ilike(genre))
+
+    if platform:
+        filters.append(Title.platform.ilike(platform))
+
+    if release_year is not None:
+        filters.append(Title.release_year == release_year)
+
+    count_query = select(func.count()).select_from(Title)
+
+    if filters:
+        count_query = count_query.where(*filters)
+
+    total = await db.scalar(count_query)
+
+    query = select(Title)
+
+    if filters:
+        query = query.where(*filters)
+
+    query = query.order_by(Title.id).offset(skip).limit(limit)
+
+    result = await db.scalars(query)
+    items = list(result.all())
+
+    return items, total or 0
+
+
 async def get_title(
-    db: AsyncSession, title_id: int
+    db: AsyncSession,
+    title_id: int,
 ) -> Title | None:
     return await db.get(Title, title_id)
 
@@ -62,7 +104,8 @@ async def update_title(
 
 
 async def delete_title(
-    db: AsyncSession, title: Title
+    db: AsyncSession,
+    title: Title,
 ) -> None:
     await db.delete(title)
     await db.commit()
