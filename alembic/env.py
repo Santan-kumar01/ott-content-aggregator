@@ -30,7 +30,9 @@ target_metadata = Base.metadata
 current_url = config.get_main_option("sqlalchemy.url")
 if not current_url or current_url.startswith("driver:"):
     if settings.database_url:
-        config.set_main_option("sqlalchemy.url", settings.database_url)
+        config.set_main_option(
+            "sqlalchemy.url", settings.database_url.replace("%", "%%")
+        )
 
 
 def run_migrations_offline() -> None:
