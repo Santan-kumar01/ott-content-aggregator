@@ -1,5 +1,8 @@
 import os
 from pathlib import Path
+import subprocess
+import sys
+
 import pytest
 import sqlalchemy as sa
 from alembic import command
@@ -12,6 +15,30 @@ def get_test_alembic_config(db_path: Path) -> Config:
     db_url = f"sqlite+aiosqlite:///{db_path.as_posix()}"
     config.set_main_option("sqlalchemy.url", db_url)
     return config
+
+
+def test_cli_uses_database_url_from_environment(tmp_path: Path):
+    """Verify the Alembic CLI uses the configured application database URL."""
+    db_file = tmp_path / "configured-url.db"
+    project_root = Path(__file__).resolve().parents[1]
+    env = os.environ.copy()
+    env["DATABASE_URL"] = f"sqlite+aiosqlite:///{db_file.as_posix()}"
+    env["JWT_SECRET_KEY"] = "test-only-secret-key-for-local-verification"
+
+    result = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        cwd=project_root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert db_file.exists()
+    with sa.create_engine(f"sqlite:///{db_file.as_posix()}").connect() as conn:
+        tables = set(sa.inspect(conn).get_table_names())
+    assert {"titles", "users", "alembic_version"} <= tables
 
 
 def test_fresh_database_migration_to_head(tmp_path: Path):
@@ -159,6 +186,39 @@ def test_incompatible_titles_schema_detection(tmp_path: Path):
     assert "release_year" in str(exc_info.value)
 
 
+@pytest.mark.parametrize(
+    ("name_column", "expected_error"),
+    [
+        ("name INTEGER NOT NULL", "must use VARCHAR(200)"),
+        ("name VARCHAR(200)", "must be NOT NULL"),
+    ],
+)
+def test_incompatible_title_column_definition(
+    tmp_path: Path, name_column: str, expected_error: str
+):
+    db_file = tmp_path / "incompatible_title_column.db"
+    sync_engine = sa.create_engine(f"sqlite:///{db_file.as_posix()}")
+    with sync_engine.begin() as conn:
+        conn.execute(sa.text(f"""
+            CREATE TABLE titles (
+                id INTEGER PRIMARY KEY,
+                {name_column},
+                description VARCHAR(2000),
+                content_type VARCHAR(20) NOT NULL,
+                release_year INTEGER NOT NULL,
+                genre VARCHAR(100) NOT NULL,
+                platform VARCHAR(100) NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
+            )
+        """))
+    sync_engine.dispose()
+
+    with pytest.raises(RuntimeError) as exc_info:
+        command.upgrade(get_test_alembic_config(db_file), "head")
+
+    assert expected_error in str(exc_info.value)
+
+
 def test_incompatible_users_schema_detection(tmp_path: Path):
     """Verify that an existing users table missing required columns causes migration to fail loudly."""
     db_file = tmp_path / "incompatible_users.db"
@@ -195,6 +255,50 @@ def test_incompatible_users_schema_detection(tmp_path: Path):
 
     assert "Migration 0002 aborted: Pre-existing table 'users' has an incompatible schema" in str(exc_info.value)
     assert "hashed_password" in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("email_column", "expected_error"),
+    [
+        ("email INTEGER NOT NULL", "must use VARCHAR(255)"),
+        ("email VARCHAR(255)", "must be NOT NULL"),
+    ],
+)
+def test_incompatible_user_column_definition(
+    tmp_path: Path, email_column: str, expected_error: str
+):
+    db_file = tmp_path / "incompatible_user_column.db"
+    sync_engine = sa.create_engine(f"sqlite:///{db_file.as_posix()}")
+    with sync_engine.begin() as conn:
+        conn.execute(sa.text("""
+            CREATE TABLE titles (
+                id INTEGER PRIMARY KEY,
+                name VARCHAR(200) NOT NULL,
+                description VARCHAR(2000),
+                content_type VARCHAR(20) NOT NULL,
+                release_year INTEGER NOT NULL,
+                genre VARCHAR(100) NOT NULL,
+                platform VARCHAR(100) NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
+            )
+        """))
+        conn.execute(sa.text(f"""
+            CREATE TABLE users (
+                id INTEGER PRIMARY KEY,
+                {email_column},
+                username VARCHAR(100) NOT NULL,
+                hashed_password VARCHAR(255) NOT NULL,
+                is_active BOOLEAN DEFAULT 1 NOT NULL,
+                is_superuser BOOLEAN DEFAULT 0 NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
+            )
+        """))
+    sync_engine.dispose()
+
+    with pytest.raises(RuntimeError) as exc_info:
+        command.upgrade(get_test_alembic_config(db_file), "head")
+
+    assert expected_error in str(exc_info.value)
 
 
 def test_incompatible_users_non_unique_email_index(tmp_path: Path):

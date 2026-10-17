@@ -153,6 +153,7 @@ CREATE DATABASE ott_db OWNER postgres;
 ### 5. Database Migrations & Schema Management
 
 Schema management is handled exclusively through **Alembic**.
+Alembic uses the same `DATABASE_URL` configured in `.env` as the application.
 
 #### Path A: Fresh Database Setup
 
