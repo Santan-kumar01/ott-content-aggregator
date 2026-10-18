@@ -1,0 +1,42 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ott-content-aggregator:latest
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-8000}:8000"
+    environment:
+      DATABASE_URL: ${COMPOSE_DATABASE_URL:-postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD_ENCODED:-${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in your environment or .env file}}@db:5432/${POSTGRES_DB:-ott_db}}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY must be set in your environment or .env file}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
+      REDIS_URL: ${REDIS_URL:-redis://localhost:6379/0}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in your environment or .env file}
+      POSTGRES_DB: ${POSTGRES_DB:-ott_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-ott_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    # Port 5432 is not exposed to the host by default to prevent conflicts with local
+    # PostgreSQL installations. If local database tools (e.g. DBeaver, pgAdmin) require host access,
+    # uncomment the lines below or set POSTGRES_PORT in .env.
+    # ports:
+    #   - "${POSTGRES_PORT:-5432}:5432"
+
+volumes:
+  postgres_data:

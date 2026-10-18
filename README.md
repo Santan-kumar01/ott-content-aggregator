@@ -113,11 +113,101 @@ REDIS_URL=redis://localhost:6379/0
 
 ---
 
-### 4. Database Setup
+### 4. Running with Docker Compose (Recommended)
 
-#### Using Docker (Recommended)
+Docker Compose provides a complete, containerized environment consisting of the FastAPI application (`api`) and PostgreSQL 16 database (`db`) with automated health checks and persistent storage.
 
-Start a PostgreSQL 16 container with a persistent named volume:
+#### Prerequisites
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed and running.
+- Docker Compose v2 (`docker compose version`).
+
+#### Step-by-Step Setup
+
+1. **Configure Environment:**
+   Ensure `.env` exists and has a generated 32-byte JWT secret:
+   ```powershell
+   # Windows PowerShell
+   Copy-Item .env.example .env
+   python -c "import secrets; print(secrets.token_hex(32))"
+   ```
+   ```bash
+   # Linux / macOS
+   cp .env.example .env
+   python3 -c "import secrets; print(secrets.token_hex(32))"
+   ```
+   Paste the generated token into `JWT_SECRET_KEY` in `.env`.
+
+2. **Build and Start Services:**
+   ```powershell
+   docker compose up -d --build
+   ```
+   Compose starts the PostgreSQL container (`db`), monitors its health check until it is healthy, and then starts the API service (`api`).
+
+3. **Verify Service Health:**
+   ```powershell
+   docker compose ps
+   ```
+   Both services will report `Up` with `db` showing `healthy`.
+
+4. **Apply Database Migrations:**
+   Run Alembic migrations inside an ephemeral API container connected to the database:
+   ```powershell
+   docker compose run --rm api alembic upgrade head
+   ```
+   Verify the applied revision:
+   ```powershell
+   docker compose run --rm api alembic current
+   # Expected output: 0002 (head)
+   ```
+
+5. **Access the API:**
+   - **Interactive Swagger UI:** http://localhost:8000/docs
+   - **ReDoc Documentation:** http://localhost:8000/redoc
+   - **Health Check Endpoint:** http://localhost:8000/health (returns `{"status":"healthy","database":"connected"}`)
+
+6. **View Live Container Logs:**
+   ```powershell
+   # Follow logs for the API service:
+   docker compose logs -f api
+
+   # Follow logs for all services:
+   docker compose logs -f
+   ```
+
+7. **Stopping Containers (Preserving Data):**
+   ```powershell
+   docker compose down
+   ```
+   This stops and removes the containers and network while **preserving** the named volume `postgres_data`. When you start the services again with `docker compose up -d`, all data remains intact.
+
+8. **Resetting Development Database (Destructive):**
+   > [!WARNING]
+   > The `-v` flag permanently deletes the named volume `postgres_data` and all database tables, users, and catalog data. Only use this when you intentionally want a clean slate.
+   ```powershell
+   docker compose down -v
+   ```
+
+#### Troubleshooting
+
+- **Missing Environment Credentials (Fail-Fast):** Both `POSTGRES_PASSWORD` and `JWT_SECRET_KEY` are strictly required by Docker Compose. If either is missing or empty, Compose will fail immediately on startup to prevent silent fallback to weak credentials or insecure defaults.
+- **Passwords with Special Characters:** If your PostgreSQL password contains URL-reserved characters (e.g. `@`, `:`, `/`, `#`, `%`), PostgreSQL expects the unescaped password in `POSTGRES_PASSWORD`, while SQLAlchemy requires the URL-encoded version in `DATABASE_URL`. URL-encode the password using `python -c "import urllib.parse; print(urllib.parse.quote('your_password'))"` and provide `POSTGRES_PASSWORD_ENCODED=<encoded>` or `COMPOSE_DATABASE_URL` in `.env`.
+- **Port 8000 Conflict:** If port 8000 is occupied by another application on your host, set `API_PORT` in `.env`:
+  ```dotenv
+  API_PORT=8001
+  ```
+  Then restart with `docker compose up -d`.
+- **Database Port Conflicts (Port 5432):** By default, `docker-compose.yml` does **not** map port 5432 to the host to prevent collisions with existing host PostgreSQL services (e.g. `ott-postgres`). The `api` service communicates with PostgreSQL over the internal Docker network via hostname `db`. If you require host access for tools like DBeaver or pgAdmin, set `POSTGRES_PORT=5433` in `.env` and uncomment the port mapping in `docker-compose.yml`.
+
+---
+
+### 5. Local Development Setup Without Compose (Alternative)
+
+If you prefer running Uvicorn and PostgreSQL directly on your host machine without Docker Compose:
+
+#### 1. Start Local PostgreSQL
+
+Start a standalone PostgreSQL 16 container:
 
 ```powershell
 docker run -d `
@@ -130,18 +220,7 @@ docker run -d `
   postgres:16-alpine
 ```
 
-*(Optional)* Start a Redis container for caching:
-
-```powershell
-docker run -d `
-  --name ott-redis `
-  -p 6379:6379 `
-  redis:7-alpine
-```
-
-#### Using Native PostgreSQL
-
-If using a local PostgreSQL service, create the database user and database:
+Or configure a native local PostgreSQL service:
 
 ```sql
 CREATE USER postgres WITH PASSWORD 'postgres';
@@ -150,7 +229,7 @@ CREATE DATABASE ott_db OWNER postgres;
 
 ---
 
-### 5. Database Migrations & Schema Management
+### 6. Database Migrations & Schema Management
 
 Schema management is handled exclusively through **Alembic**.
 Alembic uses the same `DATABASE_URL` configured in `.env` as the application.
@@ -261,7 +340,7 @@ To guard against catastrophic accidental data loss:
 
 ---
 
-### 6. Running the API
+### 7. Running the API Locally (Host)
 
 Start the local development server with auto-reload:
 
