@@ -1,7 +1,7 @@
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, status
 from sqlalchemy import text
 
 from src.api.endpoints.auth import router as auth_router
@@ -41,6 +41,19 @@ async def root():
 
 @app.get("/health")
 async def health():
-    async with engine.connect() as connection:
-        await connection.execute(text("SELECT 1"))
-    return {"status": "healthy", "database": "connected"}
+    try:
+        async with engine.connect() as connection:
+            await connection.execute(text("SELECT 1"))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "status": "unhealthy",
+                "database": "disconnected",
+            },
+        ) from exc
+
+    return {
+        "status": "healthy",
+        "database": "connected",
+    }
