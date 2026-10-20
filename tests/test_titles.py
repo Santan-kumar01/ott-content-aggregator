@@ -1,8 +1,10 @@
 
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -11,6 +13,7 @@ from sqlalchemy.ext.asyncio import (
 
 from src.core.database import Base, get_db
 from src.main import app
+from src.models.title import Title
 
 
 @pytest.fixture
@@ -424,3 +427,245 @@ async def test_list_titles_filters_by_platform_and_release_year(
     assert data[0]["name"] == "Filter Match"
     assert data[0]["platform"] == "Netflix"
     assert data[0]["release_year"] == 2022
+
+
+@pytest.mark.anyio
+async def test_list_titles_searches_name_and_description_case_insensitively(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+):
+    titles = [
+        {
+            "name": "Galaxy Quest",
+            "description": "A culinary adventure",
+            "content_type": "movie",
+            "release_year": 2024,
+            "genre": "Comedy",
+            "platform": "Netflix",
+        },
+        {
+            "name": "Quiet Planet",
+            "description": "A GALACTIC journey",
+            "content_type": "show",
+            "release_year": 2023,
+            "genre": "Sci-Fi",
+            "platform": "Prime Video",
+        },
+        {
+            "name": "Unrelated Title",
+            "description": "Nothing in common",
+            "content_type": "movie",
+            "release_year": 2022,
+            "genre": "Drama",
+            "platform": "Netflix",
+        },
+        {
+            "name": "100% Match",
+            "description": "Literal wildcard search",
+            "content_type": "movie",
+            "release_year": 2021,
+            "genre": "Comedy",
+            "platform": "Netflix",
+        },
+        {
+            "name": "100X Match",
+            "description": "Wildcard lookalike",
+            "content_type": "movie",
+            "release_year": 2021,
+            "genre": "Comedy",
+            "platform": "Netflix",
+        },
+    ]
+
+    for title in titles:
+        response = await client.post(
+            "/api/v1/titles",
+            json=title,
+            headers=auth_headers,
+        )
+        assert response.status_code == 201, response.text
+
+    name_response = await client.get("/api/v1/titles?search=galaxy")
+    description_response = await client.get(
+        "/api/v1/titles/paginated?search=GALACTIC"
+    )
+    literal_response = await client.get(
+        "/api/v1/titles/paginated?search=100%25"
+    )
+
+    assert name_response.status_code == 200, name_response.text
+    assert [title["name"] for title in name_response.json()] == [
+        "Galaxy Quest"
+    ]
+    assert description_response.status_code == 200, description_response.text
+    assert [
+        title["name"] for title in description_response.json()["items"]
+    ] == ["Quiet Planet"]
+    assert literal_response.status_code == 200, literal_response.text
+    assert [
+        title["name"] for title in literal_response.json()["items"]
+    ] == ["100% Match"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("sort_by", "sort_order", "expected_names"),
+    [
+        ("name", "asc", ["Alpha", "Mike", "Zulu"]),
+        ("name", "desc", ["Zulu", "Mike", "Alpha"]),
+        ("release_year", "asc", ["Zulu", "Mike", "Alpha"]),
+        ("release_year", "desc", ["Alpha", "Mike", "Zulu"]),
+    ],
+)
+async def test_paginated_titles_sort_by_name_or_release_year(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+    sort_by: str,
+    sort_order: str,
+    expected_names: list[str],
+):
+    titles = [
+        ("Zulu", 2020),
+        ("Alpha", 2022),
+        ("Mike", 2021),
+    ]
+    for name, release_year in titles:
+        response = await client.post(
+            "/api/v1/titles",
+            json={
+                "name": name,
+                "description": "Sorting test",
+                "content_type": "movie",
+                "release_year": release_year,
+                "genre": "Drama",
+                "platform": "Netflix",
+            },
+            headers=auth_headers,
+        )
+        assert response.status_code == 201, response.text
+
+    response = await client.get(
+        f"/api/v1/titles/paginated?sort_by={sort_by}"
+        f"&sort_order={sort_order}"
+    )
+
+    assert response.status_code == 200, response.text
+    assert [title["name"] for title in response.json()["items"]] == (
+        expected_names
+    )
+
+
+@pytest.mark.anyio
+async def test_paginated_titles_sort_by_created_at_in_both_directions(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+):
+    for name in ["Older", "Middle", "Newer"]:
+        response = await client.post(
+            "/api/v1/titles",
+            json={
+                "name": name,
+                "description": "Creation date sorting test",
+                "content_type": "movie",
+                "release_year": 2024,
+                "genre": "Drama",
+                "platform": "Netflix",
+            },
+            headers=auth_headers,
+        )
+        assert response.status_code == 201, response.text
+
+    session_generator = app.dependency_overrides[get_db]()
+    session = await session_generator.__anext__()
+    try:
+        for name, created_at in [
+            ("Older", datetime(2020, 1, 1, tzinfo=timezone.utc)),
+            ("Middle", datetime(2021, 1, 1, tzinfo=timezone.utc)),
+            ("Newer", datetime(2022, 1, 1, tzinfo=timezone.utc)),
+        ]:
+            await session.execute(
+                update(Title)
+                .where(Title.name == name)
+                .values(created_at=created_at)
+            )
+        await session.commit()
+    finally:
+        await session_generator.aclose()
+
+    ascending_response = await client.get(
+        "/api/v1/titles/paginated?sort_by=created_at&sort_order=asc"
+    )
+    descending_response = await client.get(
+        "/api/v1/titles/paginated?sort_by=created_at&sort_order=desc"
+    )
+
+    assert ascending_response.status_code == 200, ascending_response.text
+    assert descending_response.status_code == 200, descending_response.text
+    assert [
+        title["name"] for title in ascending_response.json()["items"]
+    ] == ["Older", "Middle", "Newer"]
+    assert [
+        title["name"] for title in descending_response.json()["items"]
+    ] == ["Newer", "Middle", "Older"]
+
+
+@pytest.mark.anyio
+async def test_paginated_titles_combine_search_filters_sorting_and_pagination(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+):
+    titles = [
+        ("Apollo", "SPACE mission", 2020, "Sci-Fi", "Netflix"),
+        ("Zenith", "Space exploration", 2020, "Sci-Fi", "Netflix"),
+        ("Other Genre", "Space story", 2020, "Drama", "Netflix"),
+        ("Other Platform", "Space story", 2020, "Sci-Fi", "Prime Video"),
+        ("Other Year", "Space story", 2019, "Sci-Fi", "Netflix"),
+        ("No Keyword", "A quiet story", 2020, "Sci-Fi", "Netflix"),
+    ]
+    for name, description, year, genre, platform in titles:
+        response = await client.post(
+            "/api/v1/titles",
+            json={
+                "name": name,
+                "description": description,
+                "content_type": "movie",
+                "release_year": year,
+                "genre": genre,
+                "platform": platform,
+            },
+            headers=auth_headers,
+        )
+        assert response.status_code == 201, response.text
+
+    response = await client.get(
+        "/api/v1/titles/paginated"
+        "?search=space&genre=Sci-Fi&platform=Netflix&release_year=2020"
+        "&sort_by=name&sort_order=desc&skip=1&limit=1"
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["total"] == 2
+    assert [title["name"] for title in data["items"]] == ["Apollo"]
+    assert data["skip"] == 1
+    assert data["limit"] == 1
+    assert data["has_next"] is False
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "query",
+    [
+        "sort_by=invalid",
+        "sort_order=descending",
+        "search=",
+        f"search={'x' * 201}",
+    ],
+)
+async def test_list_titles_rejects_invalid_search_and_sort_parameters(
+    client: AsyncClient,
+    query: str,
+):
+    response = await client.get(f"/api/v1/titles/paginated?{query}")
+
+    assert response.status_code == 422
