@@ -306,3 +306,121 @@ async def test_paginated_titles_invalid_pagination_parameters(
         "/api/v1/titles/paginated?limit=101"
     )
     assert response.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_create_valid_movie_returns_created_title(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+):
+    payload = {
+        "name": "Inception",
+        "description": "A science-fiction thriller",
+        "content_type": "movie",
+        "release_year": 2010,
+        "genre": "Sci-Fi",
+        "platform": "Netflix",
+    }
+
+    response = await client.post(
+        "/api/v1/titles",
+        json=payload,
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 201, response.text
+    data = response.json()
+
+    assert data["id"] > 0
+    assert data["name"] == "Inception"
+    assert data["content_type"] == "movie"
+    assert data["release_year"] == 2010
+    assert data["genre"] == "Sci-Fi"
+    assert data["platform"] == "Netflix"
+    assert "created_at" in data
+
+
+@pytest.mark.anyio
+async def test_list_titles_returns_created_movie(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+):
+    payload = {
+        "name": "Interstellar",
+        "description": "A space exploration movie",
+        "content_type": "movie",
+        "release_year": 2014,
+        "genre": "Sci-Fi",
+        "platform": "Prime Video",
+    }
+
+    create_response = await client.post(
+        "/api/v1/titles",
+        json=payload,
+        headers=auth_headers,
+    )
+    assert create_response.status_code == 201, create_response.text
+
+    response = await client.get("/api/v1/titles")
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+
+    assert any(
+        title["name"] == "Interstellar"
+        and title["platform"] == "Prime Video"
+        for title in data
+    )
+
+
+@pytest.mark.anyio
+async def test_list_titles_filters_by_platform_and_release_year(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+):
+    titles = [
+        {
+            "name": "Filter Match",
+            "description": "Should match both filters",
+            "content_type": "movie",
+            "release_year": 2022,
+            "genre": "Drama",
+            "platform": "Netflix",
+        },
+        {
+            "name": "Different Platform",
+            "description": "Should not match platform",
+            "content_type": "movie",
+            "release_year": 2022,
+            "genre": "Drama",
+            "platform": "Prime Video",
+        },
+        {
+            "name": "Different Year",
+            "description": "Should not match year",
+            "content_type": "movie",
+            "release_year": 2020,
+            "genre": "Drama",
+            "platform": "Netflix",
+        },
+    ]
+
+    for title in titles:
+        create_response = await client.post(
+            "/api/v1/titles",
+            json=title,
+            headers=auth_headers,
+        )
+        assert create_response.status_code == 201, create_response.text
+
+    response = await client.get(
+        "/api/v1/titles?platform=Netflix&release_year=2022"
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+
+    assert len(data) == 1
+    assert data[0]["name"] == "Filter Match"
+    assert data[0]["platform"] == "Netflix"
+    assert data[0]["release_year"] == 2022
