@@ -490,10 +490,26 @@ The test suite runs against an isolated async SQLite test database (`aiosqlite`)
 
 ---
 
+## Continuous Integration (CI)
+
+Automated testing and verification are handled by GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)):
+- **Triggers:** Runs automatically on all pushes and pull requests across all branches.
+- **Environment:** Ubuntu runner (`ubuntu-latest`) with Python 3.11 and automated pip dependency caching.
+- **PostgreSQL Service:** Provisions a containerized PostgreSQL 16 service with automated `pg_isready` readiness health checks.
+- **Automated Validation:**
+  1. Applies Alembic migrations (`alembic upgrade head`) against real PostgreSQL 16 and validates schema head revision (`alembic current`).
+  2. Executes the complete pytest test suite (`python -m pytest`).
+- **Validation Status:** Locally validated with simulated CI environment and test suites; remote execution activates on push to GitHub.
+
+---
+
 ## Project Structure
 
 ```text
 ott-content-aggregator/
+├── .github/
+│   └── workflows/
+│       └── ci.yml                # GitHub Actions CI pipeline
 ├── alembic/                      # Alembic database migrations
 │   ├── versions/                 # Migration scripts (0001, 0002)
 │   └── env.py                    # Async migration runner environment
@@ -507,8 +523,11 @@ ott-content-aggregator/
 │   ├── services/                 # Business logic & repository layers
 │   └── main.py                   # FastAPI application factory & lifespan
 ├── tests/                        # Comprehensive pytest suite
+├── .dockerignore                 # Docker build context exclusion rules
 ├── .env.example                  # Environment configuration template
 ├── alembic.ini                   # Alembic configuration
+├── docker-compose.yml            # Multi-container orchestration (api, db)
+├── Dockerfile                    # Multi-stage production container image
 ├── requirements.txt              # Production and development dependencies
 └── README.md                     # Project documentation
 ```
