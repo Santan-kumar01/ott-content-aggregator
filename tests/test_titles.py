@@ -1,4 +1,6 @@
 
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import (
@@ -74,8 +76,43 @@ async def test_health_endpoint(client: AsyncClient):
     response = await client.get("/health")
 
     assert response.status_code == 200
-    assert response.json()["status"] == "healthy"
-    assert response.json()["database"] == "connected"
+    assert response.json() == {
+        "status": "healthy",
+        "database": "connected",
+    }
+
+
+@pytest.mark.anyio
+async def test_health_endpoint_returns_503_when_database_fails(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from src import main
+
+    mock_connection = MagicMock()
+    mock_connection.execute = AsyncMock(
+        side_effect=RuntimeError("Database connection failed")
+    )
+
+    mock_engine = MagicMock()
+    mock_engine.connect.return_value.__aenter__ = AsyncMock(
+        return_value=mock_connection
+    )
+    mock_engine.connect.return_value.__aexit__ = AsyncMock(
+        return_value=False
+    )
+
+    monkeypatch.setattr(main, "engine", mock_engine)
+
+    response = await client.get("/health")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": {
+            "status": "unhealthy",
+            "database": "disconnected",
+        }
+    }
 
 
 @pytest.mark.anyio
@@ -129,6 +166,7 @@ async def test_unknown_title_returns_404(client: AsyncClient):
     response = await client.get("/api/v1/titles/999999")
 
     assert response.status_code == 404
+
 
 @pytest.mark.anyio
 async def test_paginated_titles_empty_result(client: AsyncClient):
@@ -268,4 +306,3 @@ async def test_paginated_titles_invalid_pagination_parameters(
         "/api/v1/titles/paginated?limit=101"
     )
     assert response.status_code == 422
-
