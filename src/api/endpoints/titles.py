@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.api.endpoints.auth import get_current_user
 from src.core.database import get_db
 from src.models.user import User
+from src.schemas.error import ErrorResponse
 from src.schemas.title import (
     PaginatedTitleRead,
     TitleCreate,
@@ -33,8 +34,14 @@ CurrentUser = Annotated[User, Depends(get_current_user)]
         "Authentication is required."
     ),
     responses={
-        401: {"description": "Authentication is required"},
-        422: {"description": "Invalid title data"},
+        401: {
+            "model": ErrorResponse,
+            "description": "Authentication is required",
+        },
+        422: {
+            "model": ErrorResponse,
+            "description": "Invalid title data",
+        },
     },
 )
 async def create_title(
@@ -201,7 +208,10 @@ async def list_titles_paginated(
     summary="Get a catalog title",
     description="Retrieve a single title by its ID.",
     responses={
-        404: {"description": "Title not found"},
+        404: {
+            "model": ErrorResponse,
+            "description": "Title not found",
+        },
     },
 )
 async def get_title(title_id: int, db: DBSession):
@@ -222,9 +232,18 @@ async def get_title(title_id: int, db: DBSession):
     summary="Update a catalog title",
     description="Update an existing title. Authentication is required.",
     responses={
-        401: {"description": "Authentication is required"},
-        404: {"description": "Title not found"},
-        422: {"description": "Invalid title data"},
+        401: {
+            "model": ErrorResponse,
+            "description": "Authentication is required",
+        },
+        404: {
+            "model": ErrorResponse,
+            "description": "Title not found",
+        },
+        422: {
+            "model": ErrorResponse,
+            "description": "Invalid title data",
+        },
     },
 )
 async def update_title(
@@ -250,8 +269,14 @@ async def update_title(
     summary="Delete a catalog title",
     description="Delete an existing title. Authentication is required.",
     responses={
-        401: {"description": "Authentication is required"},
-        404: {"description": "Title not found"},
+        401: {
+            "model": ErrorResponse,
+            "description": "Authentication is required",
+        },
+        404: {
+            "model": ErrorResponse,
+            "description": "Title not found",
+        },
     },
 )
 async def delete_title(

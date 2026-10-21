@@ -718,3 +718,27 @@ def test_paginated_titles_openapi_documentation():
     ]["schema"]
 
     assert response_schema["$ref"].endswith("/PaginatedTitleRead")
+
+
+def test_catalog_error_responses_use_error_response_schema():
+    """Verify catalog error responses reference the reusable ErrorResponse schema."""
+    schema = app.openapi()
+    paths = schema["paths"]
+
+    expected_responses = {
+        ("/api/v1/titles", "post"): ["401", "422"],
+        ("/api/v1/titles/{title_id}", "get"): ["404"],
+        ("/api/v1/titles/{title_id}", "put"): ["401", "404", "422"],
+        ("/api/v1/titles/{title_id}", "delete"): ["401", "404"],
+    }
+
+    for (path, method), status_codes in expected_responses.items():
+        operation = paths[path][method]
+
+        for status_code in status_codes:
+            response = operation["responses"][status_code]
+            response_schema = response["content"]["application/json"]["schema"]
+
+            assert response_schema["$ref"] == (
+                "#/components/schemas/ErrorResponse"
+            ), f"{method.upper()} {path} response {status_code}"
