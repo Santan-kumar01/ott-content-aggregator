@@ -19,6 +19,7 @@ async def create_title(
 
 async def list_titles(
     db: AsyncSession,
+    search: str | None = None,
     genre: str | None = None,
     platform: str | None = None,
     release_year: int | None = None,
@@ -26,6 +27,11 @@ async def list_titles(
     limit: int = 20,
 ) -> list[Title]:
     query = select(Title)
+
+    if search and search.strip():
+        query = query.where(
+            Title.name.ilike(f"%{search.strip()}%")
+        )
 
     if genre:
         query = query.where(Title.genre.ilike(genre))

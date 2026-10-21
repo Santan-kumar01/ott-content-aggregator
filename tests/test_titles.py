@@ -424,3 +424,125 @@ async def test_list_titles_filters_by_platform_and_release_year(
     assert data[0]["name"] == "Filter Match"
     assert data[0]["platform"] == "Netflix"
     assert data[0]["release_year"] == 2022
+
+
+@pytest.mark.anyio
+async def test_list_titles_search_matches_partial_name_case_insensitively(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+):
+    for name in ["Inception", "Interstellar", "The Dark Knight"]:
+        response = await client.post(
+            "/api/v1/titles",
+            json={
+                "name": name,
+                "description": "Title search test",
+                "content_type": "movie",
+                "release_year": 2010,
+                "genre": "Sci-Fi",
+                "platform": "Netflix",
+            },
+            headers=auth_headers,
+        )
+        assert response.status_code == 201, response.text
+
+    response = await client.get("/api/v1/titles?search=incept")
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert [title["name"] for title in data] == ["Inception"]
+
+    response = await client.get("/api/v1/titles?search=INTER")
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert [title["name"] for title in data] == ["Interstellar"]
+
+
+@pytest.mark.anyio
+async def test_list_titles_search_returns_empty_list_when_no_match(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+):
+    response = await client.post(
+        "/api/v1/titles",
+        json={
+            "name": "Inception",
+            "description": "Title search test",
+            "content_type": "movie",
+            "release_year": 2010,
+            "genre": "Sci-Fi",
+            "platform": "Netflix",
+        },
+        headers=auth_headers,
+    )
+    assert response.status_code == 201, response.text
+
+    response = await client.get(
+        "/api/v1/titles?search=unknown-title"
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == []
+
+
+@pytest.mark.anyio
+async def test_list_titles_search_combines_with_existing_filters(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+):
+    titles = [
+        {
+            "name": "Inception",
+            "description": "Matching title and filters",
+            "content_type": "movie",
+            "release_year": 2010,
+            "genre": "Sci-Fi",
+            "platform": "Netflix",
+        },
+        {
+            "name": "Inception Special",
+            "description": "Different platform",
+            "content_type": "movie",
+            "release_year": 2010,
+            "genre": "Sci-Fi",
+            "platform": "Prime Video",
+        },
+        {
+            "name": "Inception Returns",
+            "description": "Different year",
+            "content_type": "movie",
+            "release_year": 2020,
+            "genre": "Sci-Fi",
+            "platform": "Netflix",
+        },
+    ]
+
+    for title in titles:
+        response = await client.post(
+            "/api/v1/titles",
+            json=title,
+            headers=auth_headers,
+        )
+        assert response.status_code == 201, response.text
+
+    response = await client.get(
+        "/api/v1/titles?search=incept&platform=Netflix&release_year=2010"
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert [title["name"] for title in data] == ["Inception"]
+
+
+@pytest.mark.anyio
+async def test_list_titles_search_rejects_invalid_length(
+    client: AsyncClient,
+):
+    empty_search = await client.get("/api/v1/titles?search=")
+    assert empty_search.status_code == 422
+
+    long_search = await client.get(
+        f"/api/v1/titles?search={'a' * 201}"
+    )
+    assert long_search.status_code == 422

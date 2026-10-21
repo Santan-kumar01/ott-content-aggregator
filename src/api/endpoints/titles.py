@@ -37,6 +37,9 @@ async def create_title(
 @router.get("", response_model=list[TitleRead])
 async def list_titles(
     db: DBSession,
+    search: str | None = Query(
+        default=None, min_length=1, max_length=200
+    ),
     genre: str | None = None,
     platform: str | None = None,
     release_year: int | None = Query(
@@ -47,6 +50,7 @@ async def list_titles(
 ):
     return await catalog_service.list_titles(
         db,
+        search=search,
         genre=genre,
         platform=platform,
         release_year=release_year,
