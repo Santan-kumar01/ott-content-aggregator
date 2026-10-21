@@ -1,4 +1,3 @@
-
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
@@ -550,9 +549,9 @@ async def test_paginated_titles_sort_by_name_or_release_year(
     )
 
     assert response.status_code == 200, response.text
-    assert [title["name"] for title in response.json()["items"]] == (
-        expected_names
-    )
+    assert [
+        title["name"] for title in response.json()["items"]
+    ] == expected_names
 
 
 @pytest.mark.anyio
@@ -669,3 +668,53 @@ async def test_list_titles_rejects_invalid_search_and_sort_parameters(
     response = await client.get(f"/api/v1/titles/paginated?{query}")
 
     assert response.status_code == 422
+
+
+def test_title_list_openapi_documentation():
+    """Verify catalog list endpoint documentation in OpenAPI."""
+    schema = app.openapi()
+    operation = schema["paths"]["/api/v1/titles"]["get"]
+
+    assert operation["summary"] == "List and search catalog titles"
+    assert "case-insensitive" in operation["description"]
+
+    parameters = {
+        parameter["name"]: parameter
+        for parameter in operation["parameters"]
+    }
+
+    search_schema = parameters["search"]["schema"]
+    string_schema = next(
+        item
+        for item in search_schema["anyOf"]
+        if item.get("type") == "string"
+    )
+
+    assert string_schema["minLength"] == 1
+    assert string_schema["maxLength"] == 200
+    assert (
+        "Case-insensitive partial match"
+        in parameters["search"]["description"]
+    )
+
+    assert "sort_by" in parameters
+    assert "sort_order" in parameters
+    assert "skip" in parameters
+    assert "limit" in parameters
+
+
+def test_paginated_titles_openapi_documentation():
+    """Verify paginated endpoint summary and response schema."""
+    schema = app.openapi()
+    operation = schema["paths"]["/api/v1/titles/paginated"]["get"]
+
+    assert operation["summary"] == (
+        "List catalog titles with pagination metadata"
+    )
+    assert "has_next" in operation["description"]
+
+    response_schema = operation["responses"]["200"]["content"][
+        "application/json"
+    ]["schema"]
+
+    assert response_schema["$ref"].endswith("/PaginatedTitleRead")
