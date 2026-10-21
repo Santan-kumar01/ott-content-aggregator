@@ -7,7 +7,7 @@ A high-performance, asynchronous RESTful API built with **FastAPI**, **SQLAlchem
 ## Features
 
 - **Title Catalog Management**: Full CRUD operations for movies and series with metadata (genres, release year, director, cast, platform availability).
-- **Advanced Filtering**: Filter titles by genre, release year, language, rating, and streaming platform.
+- **Catalog Search & Sorting**: Search title names and descriptions, combine search with genre, platform, and release-year filters, and sort results by name, release year, or creation time.
 - **JWT Authentication & Security**: Secure user registration, OAuth2 password flow login, cryptographically hashed passwords with `bcrypt`, and stateless JWT tokens.
 - **Protected Write Endpoints**: Title modifications (create, update, delete) are protected by Bearer authentication, while catalog browsing remains publicly accessible.
 - **Asynchronous Database Access**: Built on SQLAlchemy 2.0 with the `asyncpg` PostgreSQL driver for high concurrency.
@@ -465,10 +465,36 @@ Similarly, updating (`PUT /api/v1/titles/{id}`) and deleting (`DELETE /api/v1/ti
 | `POST` | `/api/v1/auth/login` | Public | Authenticate and obtain JWT token |
 | `GET` | `/api/v1/auth/me` | Protected | Get profile of authenticated user |
 | `GET` | `/api/v1/titles/` | Public | List and filter titles |
+| `GET` | `/api/v1/titles/paginated` | Public | List, search, filter, sort, and paginate titles with total count |
 | `GET` | `/api/v1/titles/{id}` | Public | Retrieve a title by ID |
 | `POST` | `/api/v1/titles/` | Protected | Create a new title |
 | `PUT` | `/api/v1/titles/{id}` | Protected | Update an existing title |
 | `DELETE` | `/api/v1/titles/{id}` | Protected | Delete a title |
+
+### Catalog Search, Filtering, Sorting, and Pagination
+
+Both `GET /api/v1/titles/` and `GET /api/v1/titles/paginated` accept the same catalog query parameters. Search matches title names or descriptions without regard to letter case. Search, filters, sorting, and pagination can be combined; the paginated route's `total` counts all results matching the search and filters before pagination.
+
+| Parameter | Description |
+|---|---|
+| `search` | Optional keyword matched anywhere in a title name or description (1–200 characters). |
+| `genre` | Optional exact genre filter (case-insensitive). |
+| `platform` | Optional exact platform filter (case-insensitive). |
+| `release_year` | Optional release year filter (1888–2100). |
+| `sort_by` | Optional sort field: `name`, `release_year`, or `created_at`. |
+| `sort_order` | Optional sort direction: `asc` or `desc`; defaults to `asc` when `sort_by` is provided. |
+| `skip` | Number of matching titles to skip; defaults to `0`. |
+| `limit` | Maximum number of titles to return (1–100); defaults to `20`. |
+
+Without `sort_by`, results retain the default ID order. When a sort field is selected, equal values are returned in ascending ID order. Invalid search lengths, sort fields, sort directions, filter ranges, or pagination values return `422 Unprocessable Entity`.
+
+Example: search for titles mentioning “space”, keep only Netflix Sci-Fi titles released in 2020, sort newest names first, and return the second result:
+
+```bash
+curl "http://127.0.0.1:8000/api/v1/titles/paginated?search=space&genre=Sci-Fi&platform=Netflix&release_year=2020&sort_by=name&sort_order=desc&skip=1&limit=1"
+```
+
+The paginated response includes `items`, the filtered `total`, `skip`, `limit`, and `has_next`. The non-paginated route returns a title array and uses the same `skip` and `limit` parameters.
 
 ---
 

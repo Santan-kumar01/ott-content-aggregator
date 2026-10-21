@@ -1,5 +1,5 @@
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -37,23 +37,25 @@ async def create_title(
 @router.get("", response_model=list[TitleRead])
 async def list_titles(
     db: DBSession,
-    search: str | None = Query(
-        default=None, min_length=1, max_length=200
-    ),
     genre: str | None = None,
     platform: str | None = None,
+    search: str | None = Query(default=None, min_length=1, max_length=200),
     release_year: int | None = Query(
         default=None, ge=1888, le=2100
     ),
+    sort_by: Literal["name", "release_year", "created_at"] | None = None,
+    sort_order: Literal["asc", "desc"] = "asc",
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=20, ge=1, le=100),
 ):
     return await catalog_service.list_titles(
         db,
-        search=search,
         genre=genre,
         platform=platform,
+        search=search,
         release_year=release_year,
+        sort_by=sort_by,
+        sort_order=sort_order,
         skip=skip,
         limit=limit,
     )
@@ -64,9 +66,12 @@ async def list_titles_paginated(
     db: DBSession,
     genre: str | None = None,
     platform: str | None = None,
+    search: str | None = Query(default=None, min_length=1, max_length=200),
     release_year: int | None = Query(
         default=None, ge=1888, le=2100
     ),
+    sort_by: Literal["name", "release_year", "created_at"] | None = None,
+    sort_order: Literal["asc", "desc"] = "asc",
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=20, ge=1, le=100),
 ):
@@ -74,7 +79,10 @@ async def list_titles_paginated(
         db,
         genre=genre,
         platform=platform,
+        search=search,
         release_year=release_year,
+        sort_by=sort_by,
+        sort_order=sort_order,
         skip=skip,
         limit=limit,
     )
