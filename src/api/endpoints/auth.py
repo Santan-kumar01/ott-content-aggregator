@@ -13,6 +13,7 @@ from src.core.security import (
     verify_password,
 )
 from src.models.user import User
+from src.schemas.error import ErrorResponse
 from src.schemas.user import Token, UserCreate, UserRead
 from src.services import auth_service
 
@@ -72,6 +73,16 @@ CurrentUser = Annotated[User, Depends(get_current_user)]
     "/register",
     response_model=UserRead,
     status_code=status.HTTP_201_CREATED,
+    responses={
+        400: {
+            "model": ErrorResponse,
+            "description": "Email is already registered",
+        },
+        422: {
+            "model": ErrorResponse,
+            "description": "Invalid registration data",
+        },
+    },
 )
 async def register(data: UserCreate, db: DBSession):
     """Register a new user account."""
@@ -81,6 +92,20 @@ async def register(data: UserCreate, db: DBSession):
 @router.post(
     "/login",
     response_model=Token,
+    responses={
+        400: {
+            "model": ErrorResponse,
+            "description": "User account is inactive",
+        },
+        401: {
+            "model": ErrorResponse,
+            "description": "Invalid login credentials",
+        },
+        422: {
+            "model": ErrorResponse,
+            "description": "Invalid login form data",
+        },
+    },
 )
 async def login(
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
@@ -97,7 +122,9 @@ async def login(
             select(User).where(User.username == form_data.username)
         )
         candidate = result.first()
-        if candidate and verify_password(form_data.password, candidate.hashed_password):
+        if candidate and verify_password(
+            form_data.password, candidate.hashed_password
+        ):
             user = candidate
 
     if not user:
@@ -120,6 +147,16 @@ async def login(
 @router.get(
     "/me",
     response_model=UserRead,
+    responses={
+        400: {
+            "model": ErrorResponse,
+            "description": "User account is inactive",
+        },
+        401: {
+            "model": ErrorResponse,
+            "description": "Authentication is required or invalid",
+        },
+    },
 )
 async def get_me(current_user: CurrentUser):
     """Retrieve profile information for the currently authenticated user."""

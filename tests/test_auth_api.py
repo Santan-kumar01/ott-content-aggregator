@@ -277,3 +277,27 @@ async def test_inactive_user_rejected_on_login_and_me(client: AsyncClient):
         assert me_res.json()["detail"] == "Inactive user"
     finally:
         await engine.dispose()
+
+
+
+def test_authentication_error_responses_openapi_documentation():
+    """Verify authentication endpoints document their error response schemas."""
+    schema = app.openapi()
+    paths = schema["paths"]
+
+    expected_responses = {
+        ("/api/v1/auth/register", "post"): ["400", "422"],
+        ("/api/v1/auth/login", "post"): ["400", "401", "422"],
+        ("/api/v1/auth/me", "get"): ["400", "401"],
+    }
+
+    for (path, method), status_codes in expected_responses.items():
+        operation = paths[path][method]
+
+        for status_code in status_codes:
+            response = operation["responses"][status_code]
+            response_schema = response["content"]["application/json"]["schema"]
+
+            assert response_schema["$ref"] == (
+                "#/components/schemas/ErrorResponse"
+            ), f"{method.upper()} {path} response {status_code}"
