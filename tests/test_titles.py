@@ -742,3 +742,53 @@ def test_catalog_error_responses_use_error_response_schema():
             assert response_schema["$ref"] == (
                 "#/components/schemas/ErrorResponse"
             ), f"{method.upper()} {path} response {status_code}"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("method", "field", "invalid_value"),
+    [
+        ("post", "name", ""),
+        ("post", "name", "N" * 201),
+        ("post", "description", "D" * 2001),
+        ("post", "genre", ""),
+        ("post", "platform", "P" * 101),
+        ("post", "release_year", 2101),
+        ("put", "name", ""),
+        ("put", "description", "D" * 2001),
+        ("put", "genre", ""),
+        ("put", "platform", "P" * 101),
+    ],
+)
+async def test_title_endpoints_reject_invalid_field_boundaries(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+    method: str,
+    field: str,
+    invalid_value: str | int,
+):
+    """Reject title payloads that violate schema boundary constraints."""
+    payload = {
+        "name": "Boundary Test Movie",
+        "description": "Valid description",
+        "content_type": "movie",
+        "release_year": 2020,
+        "genre": "Drama",
+        "platform": "Netflix",
+    }
+    payload[field] = invalid_value
+
+    if method == "post":
+        response = await client.post(
+            "/api/v1/titles",
+            json=payload,
+            headers=auth_headers,
+        )
+    else:
+        response = await client.put(
+            "/api/v1/titles/1",
+            json=payload,
+            headers=auth_headers,
+        )
+
+    assert response.status_code == 422, response.text
