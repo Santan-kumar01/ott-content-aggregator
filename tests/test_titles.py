@@ -792,3 +792,62 @@ async def test_title_endpoints_reject_invalid_field_boundaries(
         )
 
     assert response.status_code == 422, response.text
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("sort_order", ["asc", "desc"])
+async def test_paginated_titles_use_id_as_stable_sort_tiebreaker(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+    sort_order: str,
+):
+    """Keep equal primary sort values ordered by ascending title ID."""
+    created_titles = []
+
+    for name in ["First Inserted", "Second Inserted", "Third Inserted"]:
+        response = await client.post(
+            "/api/v1/titles",
+            json={
+                "name": name,
+                "description": "Stable sorting regression test",
+                "content_type": "movie",
+                "release_year": 2024,
+                "genre": "Drama",
+                "platform": "Netflix",
+            },
+            headers=auth_headers,
+        )
+        assert response.status_code == 201, response.text
+        created_titles.append(response.json())
+
+    session_generator = app.dependency_overrides[get_db]()
+    session = await session_generator.__anext__()
+    try:
+        for title, new_name in zip(
+            created_titles,
+            ["Third Inserted", "Second Inserted", "First Inserted"],
+        ):
+            await session.execute(
+                update(Title)
+                .where(Title.id == title["id"])
+                .values(name=new_name)
+            )
+        await session.commit()
+    finally:
+        await session_generator.aclose()
+
+    response = await client.get(
+        f"/api/v1/titles/paginated?sort_by=release_year&sort_order={sort_order}"
+    )
+
+    assert response.status_code == 200, response.text
+    result_titles = response.json()["items"]
+
+    assert [title["id"] for title in result_titles] == sorted(
+        title["id"] for title in result_titles
+    )
+    assert [title["name"] for title in result_titles] == [
+        "Third Inserted",
+        "Second Inserted",
+        "First Inserted",
+    ]
