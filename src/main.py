@@ -41,6 +41,13 @@ async def root():
 
 @app.get("/health")
 async def health():
+    """Report whether the API process is alive."""
+    return {"status": "healthy"}
+
+
+@app.get("/ready")
+async def readiness():
+    """Report whether the API can serve requests using its database."""
     try:
         async with engine.connect() as connection:
             await connection.execute(text("SELECT 1"))
@@ -48,12 +55,12 @@ async def health():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={
-                "status": "unhealthy",
+                "status": "not_ready",
                 "database": "disconnected",
             },
         ) from exc
 
     return {
-        "status": "healthy",
+        "status": "ready",
         "database": "connected",
     }
