@@ -78,14 +78,22 @@ async def test_health_endpoint(client: AsyncClient):
     response = await client.get("/health")
 
     assert response.status_code == 200
+    assert response.json() == {"status": "healthy"}
+
+
+@pytest.mark.anyio
+async def test_readiness_endpoint(client: AsyncClient):
+    response = await client.get("/ready")
+
+    assert response.status_code == 200
     assert response.json() == {
-        "status": "healthy",
+        "status": "ready",
         "database": "connected",
     }
 
 
 @pytest.mark.anyio
-async def test_health_endpoint_returns_503_when_database_fails(
+async def test_readiness_endpoint_returns_503_when_database_fails(
     client: AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -106,16 +114,15 @@ async def test_health_endpoint_returns_503_when_database_fails(
 
     monkeypatch.setattr(main, "engine", mock_engine)
 
-    response = await client.get("/health")
+    response = await client.get("/ready")
 
     assert response.status_code == 503
     assert response.json() == {
         "detail": {
-            "status": "unhealthy",
+            "status": "not_ready",
             "database": "disconnected",
         }
     }
-
 
 @pytest.mark.anyio
 async def test_create_title_invalid_year(
