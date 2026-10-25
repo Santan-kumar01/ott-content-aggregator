@@ -1,25 +1,29 @@
 """create_initial_users_and_titles_tables
 
 Revision ID: 497ce7b6dfad
-Revises: 
+Revises: 0002
 Create Date: 2026-10-25 20:31:59.114010
 
 """
+import os
 from typing import Sequence, Union
 
-from alembic import op
+from alembic import context, op
 import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
 revision: str = '497ce7b6dfad'
-down_revision: Union[str, Sequence[str], None] = None
+down_revision: Union[str, Sequence[str], None] = '0002'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    """Upgrade schema: create users and titles tables with indexes."""
+    """Upgrade schema: ensure users and titles tables exist with required indexes."""
+    if context.is_offline_mode():
+        return
+
     conn = op.get_bind()
     inspector = sa.inspect(conn)
     tables = inspector.get_table_names()
@@ -45,6 +49,14 @@ def upgrade() -> None:
         op.create_index(op.f("ix_users_id"), "users", ["id"], unique=False)
         op.create_index(op.f("ix_users_email"), "users", ["email"], unique=True)
         op.create_index(op.f("ix_users_username"), "users", ["username"], unique=False)
+    else:
+        existing_indexes = {idx["name"] for idx in inspector.get_indexes("users")}
+        if "ix_users_id" not in existing_indexes:
+            op.create_index(op.f("ix_users_id"), "users", ["id"], unique=False)
+        if "ix_users_email" not in existing_indexes:
+            op.create_index(op.f("ix_users_email"), "users", ["email"], unique=True)
+        if "ix_users_username" not in existing_indexes:
+            op.create_index(op.f("ix_users_username"), "users", ["username"], unique=False)
 
     # Create titles table if not already created
     if "titles" not in tables:
@@ -70,13 +82,50 @@ def upgrade() -> None:
         op.create_index(op.f("ix_titles_release_year"), "titles", ["release_year"], unique=False)
         op.create_index(op.f("ix_titles_genre"), "titles", ["genre"], unique=False)
         op.create_index(op.f("ix_titles_platform"), "titles", ["platform"], unique=False)
+    else:
+        existing_indexes = {idx["name"] for idx in inspector.get_indexes("titles")}
+        for idx_name, cols in [
+            ("ix_titles_id", ["id"]),
+            ("ix_titles_name", ["name"]),
+            ("ix_titles_release_year", ["release_year"]),
+            ("ix_titles_genre", ["genre"]),
+            ("ix_titles_platform", ["platform"]),
+        ]:
+            if idx_name not in existing_indexes:
+                op.create_index(op.f(idx_name), "titles", cols, unique=False)
 
 
 def downgrade() -> None:
-    """Downgrade schema: drop titles and users tables with indexes."""
+    """Downgrade schema: drop titles and users tables with data loss protection."""
+    if context.is_offline_mode():
+        return
+
     conn = op.get_bind()
     inspector = sa.inspect(conn)
     tables = inspector.get_table_names()
+
+    # Protect against data loss
+    if "users" in tables:
+        has_data = conn.execute(sa.text("SELECT 1 FROM users LIMIT 1")).first() is not None
+        allow_destructive = os.environ.get("ALLOW_DESTRUCTIVE_DOWNGRADE", "").lower() in ("1", "true", "yes")
+        if has_data and not allow_destructive:
+            raise RuntimeError(
+                "Downgrade aborted: Table 'users' contains data. "
+                "Refusing to drop table during rollback to prevent accidental data loss. "
+                "If you intentionally want to drop the table and destroy all data, "
+                "set the environment variable ALLOW_DESTRUCTIVE_DOWNGRADE=1 before running downgrade."
+            )
+
+    if "titles" in tables:
+        has_data = conn.execute(sa.text("SELECT 1 FROM titles LIMIT 1")).first() is not None
+        allow_destructive = os.environ.get("ALLOW_DESTRUCTIVE_DOWNGRADE", "").lower() in ("1", "true", "yes")
+        if has_data and not allow_destructive:
+            raise RuntimeError(
+                "Downgrade aborted: Table 'titles' contains data. "
+                "Refusing to drop table during rollback to prevent accidental data loss. "
+                "If you intentionally want to drop the table and destroy all data, "
+                "set the environment variable ALLOW_DESTRUCTIVE_DOWNGRADE=1 before running downgrade."
+            )
 
     if "titles" in tables:
         existing_indexes = {idx["name"] for idx in inspector.get_indexes("titles")}
@@ -91,4 +140,3 @@ def downgrade() -> None:
             if idx in existing_indexes:
                 op.drop_index(op.f(idx), table_name="users")
         op.drop_table("users")
-
