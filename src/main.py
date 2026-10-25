@@ -15,7 +15,6 @@ from src.models.user import User  # Registers the model
 async def lifespan(app: FastAPI):
     # Application startup: schema management is delegated to Alembic migrations.
     yield
-
     # Application shutdown: gracefully dispose engine connection pool.
     await engine.dispose()
 
