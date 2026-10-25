@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.endpoints.auth import get_current_user
@@ -50,16 +50,19 @@ async def list_titles(
 
 
 @router.get("/{title_id}", response_model=TitleRead)
-async def get_title(title_id: int, db: DBSession):
+async def get_title(
+    title_id: Annotated[int, Path(gt=0, description="The ID of the title to retrieve")],
+    db: DBSession,
+):
     title = await catalog_service.get_title(db, title_id)
     if title is None:
         raise HTTPException(status_code=404, detail="Title not found")
     return title
 
 
-@router.put("/{title_id}", response_model=TitleRead)
+@router.patch("/{title_id}", response_model=TitleRead)
 async def update_title(
-    title_id: int,
+    title_id: Annotated[int, Path(gt=0, description="The ID of the title to update")],
     data: TitleUpdate,
     db: DBSession,
     current_user: CurrentUser,
@@ -72,7 +75,7 @@ async def update_title(
 
 @router.delete("/{title_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_title(
-    title_id: int,
+    title_id: Annotated[int, Path(gt=0, description="The ID of the title to delete")],
     db: DBSession,
     current_user: CurrentUser,
 ):

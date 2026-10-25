@@ -11,7 +11,11 @@ async def create_title(
 ) -> Title:
     title = Title(**data.model_dump())
     db.add(title)
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
     await db.refresh(title)
     return title
 
@@ -56,7 +60,11 @@ async def update_title(
     ).items():
         setattr(title, field, value)
 
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
     await db.refresh(title)
     return title
 
@@ -65,4 +73,8 @@ async def delete_title(
     db: AsyncSession, title: Title
 ) -> None:
     await db.delete(title)
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
