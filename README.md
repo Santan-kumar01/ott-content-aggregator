@@ -64,11 +64,56 @@ Once the application is running:
 
 | Method | Endpoint | Description |
 |---|---|---|
-| POST | `/api/v1/titles/` | Create a title |
-| GET | `/api/v1/titles/` | List and filter titles |
-| GET | `/api/v1/titles/{title_id}` | Retrieve a title |
-| PATCH | `/api/v1/titles/{title_id}` | Update a title |
-| DELETE | `/api/v1/titles/{title_id}` | Delete a title |
+| POST | `/api/v1/auth/register` | Register a new user account |
+| POST | `/api/v1/auth/login` | Authenticate user and issue JWT bearer access token |
+| GET | `/api/v1/auth/me` | Retrieve profile of authenticated user |
+| POST | `/api/v1/titles` | Create a title (Requires Bearer Token) |
+| GET | `/api/v1/titles` | List, search, and filter titles (Public) |
+| GET | `/api/v1/titles/paginated` | List, search, filter, sort, and paginate titles with metadata (Public) |
+| GET | `/api/v1/titles/{title_id}` | Retrieve a title by ID (Public) |
+| PATCH | `/api/v1/titles/{title_id}` | Update a title (Requires Bearer Token) |
+| DELETE | `/api/v1/titles/{title_id}` | Delete a title (Requires Bearer Token) |
+
+### Catalog Search, Filtering, Sorting, and Pagination
+
+Both `GET /api/v1/titles` and `GET /api/v1/titles/paginated` accept query parameters to filter, search, sort, and paginate catalog titles:
+
+| Parameter | Type | Validation / Allowed Values | Description |
+|---|---|---|---|
+| `search` | Query (string) | Length: 1–200 characters | Case-insensitive partial match in title `name` or `description`. SQL wildcards (`%`, `_`, `\`) are safely escaped. |
+| `genre` | Query (string) | Case-insensitive | Filters titles by exact genre name. |
+| `platform` | Query (string) | Case-insensitive | Filters titles by exact streaming platform name. |
+| `release_year` | Query (int) | Between 1888 and 2100 | Filters titles by release year. |
+| `sort_by` | Query (string) | `name`, `release_year`, `created_at` | Field to sort by. Defaults to insertion order (`id`) if omitted. Uses `id` ascending as deterministic tiebreaker. |
+| `sort_order` | Query (string) | `asc`, `desc` (default: `asc`) | Sort direction. |
+| `skip` | Query (int) | `>= 0` (default: `0`) | Number of matching titles to skip. |
+| `limit` | Query (int) | `1` to `100` (default: `20`) | Maximum number of titles to return. |
+
+#### Paginated Response Format (`GET /api/v1/titles/paginated`)
+
+```json
+{
+  "items": [
+    {
+      "id": 1,
+      "name": "Inception",
+      "description": "Mind-bending sci-fi heist thriller",
+      "content_type": "movie",
+      "release_year": 2010,
+      "genre": "Sci-Fi",
+      "platform": "Netflix",
+      "created_at": "2026-10-25T16:00:00"
+    }
+  ],
+  "total": 1,
+  "skip": 0,
+  "limit": 20,
+  "has_next": false
+}
+```
+
+The `total` field reflects the total number of records matching all active search and filter criteria before pagination.
+
 
 ## Team Collaboration
 
