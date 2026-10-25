@@ -858,3 +858,22 @@ async def test_paginated_titles_use_id_as_stable_sort_tiebreaker(
         "Second Inserted",
         "First Inserted",
     ]
+
+@pytest.mark.anyio
+async def test_health_endpoint_stays_healthy_when_database_fails(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from src import main
+
+    mock_engine = MagicMock()
+    mock_engine.connect.side_effect = RuntimeError(
+        "Database connection failed"
+    )
+
+    monkeypatch.setattr(main, "engine", mock_engine)
+
+    response = await client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "healthy"}
