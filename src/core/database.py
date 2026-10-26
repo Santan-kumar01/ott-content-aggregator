@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     cache_ttl_seconds: int = 300
     cache_enabled: bool = True
+    external_api_timeout_seconds: float = 10.0
+    external_api_max_retries: int = 2
+    external_provider_base_url: str = "https://api.example-ott-provider.com"
 
     model_config = SettingsConfigDict(
         env_file=".env",

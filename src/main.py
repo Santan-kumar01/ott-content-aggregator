@@ -8,18 +8,21 @@ from src.api.endpoints.auth import router as auth_router
 from src.api.endpoints.titles import router as titles_router
 from src.core.cache import check_redis_health, close_redis_client, init_redis_client
 from src.core.database import engine
+from src.core.http_client import close_http_client, init_http_client
 from src.models.title import Title  # Registers the model
 from src.models.user import User  # Registers the model
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Application startup: initialize Redis cache connection pool
+    # Application startup: initialize Redis cache and shared HTTP client
     await init_redis_client()
+    await init_http_client()
     try:
         yield
     finally:
-        # Application shutdown: gracefully release Redis and database resources
+        # Application shutdown: gracefully release HTTP, Redis, and database resources
+        await close_http_client()
         await close_redis_client()
         await engine.dispose()
 

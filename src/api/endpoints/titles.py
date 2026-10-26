@@ -1,11 +1,13 @@
+import uuid
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.endpoints.auth import get_current_user
 from src.core.database import get_db
 from src.models.user import User
+from src.schemas.sync import SyncRequest, SyncTaskResponse, SyncTaskStatus
 from src.schemas.title import (
     PaginatedTitleRead,
     TitleCreate,
@@ -13,6 +15,11 @@ from src.schemas.title import (
     TitleUpdate,
 )
 from src.services import cache_service, catalog_service
+from src.services.background_tasks import (
+    get_background_task_status,
+    register_background_task,
+    sync_title_from_external_provider_task,
+)
 
 router = APIRouter(prefix="/titles", tags=["Catalog"])
 
@@ -240,6 +247,21 @@ async def list_titles_paginated(
     return response_payload
 
 
+@router.get(
+    "/sync/tasks/{task_id}",
+    response_model=SyncTaskStatus,
+    summary="Check background task status",
+    description="Retrieve execution status, outcome, or error details of an asynchronous background sync job.",
+)
+async def get_sync_task_status(
+    task_id: Annotated[str, Path(description="The unique UUID of the background task")],
+):
+    task_info = get_background_task_status(task_id)
+    if task_info is None:
+        raise HTTPException(status_code=404, detail="Background task not found")
+    return task_info
+
+
 @router.get("/{title_id}", response_model=TitleRead)
 async def get_title(
     title_id: Annotated[int, Path(gt=0, description="The ID of the title to retrieve")],
@@ -284,3 +306,42 @@ async def delete_title(
         raise HTTPException(status_code=404, detail="Title not found")
     await catalog_service.delete_title(db, title)
     await cache_service.invalidate_catalog(title_id=title_id)
+
+
+@router.post(
+    "/{title_id}/sync",
+    response_model=SyncTaskResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Queue background external metadata sync",
+    description=(
+        "Trigger an asynchronous background job using FastAPI BackgroundTasks "
+        "to fetch external streaming provider metadata, update PostgreSQL, "
+        "and invalidate the Redis catalog cache post-commit."
+    ),
+)
+async def sync_title_metadata(
+    title_id: Annotated[int, Path(gt=0, description="The ID of the title to sync")],
+    background_tasks: BackgroundTasks,
+    db: DBSession,
+    current_user: CurrentUser,
+    sync_data: SyncRequest | None = None,
+):
+    title = await catalog_service.get_title(db, title_id)
+    if title is None:
+        raise HTTPException(status_code=404, detail="Title not found")
+
+    task_id = str(uuid.uuid4())
+    register_background_task(task_id, title_id)
+    background_tasks.add_task(
+        sync_title_from_external_provider_task,
+        task_id=task_id,
+        title_id=title_id,
+        external_id=sync_data.external_id if sync_data else None,
+        provider=sync_data.provider if sync_data else None,
+    )
+    return {
+        "task_id": task_id,
+        "title_id": title_id,
+        "status": "queued",
+        "message": "Title synchronization queued in background",
+    }

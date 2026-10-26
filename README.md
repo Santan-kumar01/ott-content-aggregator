@@ -13,6 +13,7 @@ A high-performance, asynchronous RESTful API built with **FastAPI**, **SQLAlchem
 - **Asynchronous Database Access**: Built on SQLAlchemy 2.0 with the `asyncpg` PostgreSQL driver for high concurrency.
 - **Database Migrations**: Version-controlled schema migrations with **Alembic**.
 - **Caching**: Redis integration for accelerated query performance.
+- **External HTTP & Background Processing**: Non-blocking external provider metadata synchronization via shared `httpx.AsyncClient` and `FastAPI.BackgroundTasks` with bounded retries and observable job tracking.
 - **Interactive Documentation**: Auto-generated Swagger UI and ReDoc OpenAPI specifications.
 - **Comprehensive Test Suite**: Automated unit and integration tests using `pytest` and `httpx`.
 
@@ -28,6 +29,7 @@ A high-performance, asynchronous RESTful API built with **FastAPI**, **SQLAlchem
 - **Validation & Settings**: [Pydantic v2](https://docs.pydantic.dev/) & [pydantic-settings](https://docs.pydantic.dev/latest/concepts/pydantic_settings/)
 - **Security & Auth**: [python-jose](https://github.com/mpdavis/python-jose), [passlib](https://passlib.readthedocs.io/), and [bcrypt](https://github.com/pyca/bcrypt)
 - **Cache**: [Redis](https://redis.io/)
+- **HTTP Client & Background Tasks**: [HTTPX](https://www.python-httpx.org/) & FastAPI BackgroundTasks
 - **Testing**: [pytest](https://docs.pytest.org/), [pytest-asyncio](https://github.com/pytest-dev/pytest-asyncio), [HTTPX](https://www.python-httpx.org/), and [aiosqlite](https://github.com/omnilib/aiosqlite)
 
 ---
@@ -108,6 +110,11 @@ ACCESS_TOKEN_EXPIRE_MINUTES=30
 REDIS_URL=redis://localhost:6379/0
 CACHE_TTL_SECONDS=300
 CACHE_ENABLED=true
+
+# External HTTP & Background Sync Operations
+EXTERNAL_API_TIMEOUT_SECONDS=10.0
+EXTERNAL_API_MAX_RETRIES=2
+EXTERNAL_PROVIDER_BASE_URL=https://api.example-ott-provider.com
 ```
 
 > [!CAUTION]
@@ -491,9 +498,45 @@ The application uses production-conscious asynchronous Redis caching to accelera
 
 ---
 
+## Background Processing & External HTTP Operations
+
+The application supports asynchronous external metadata synchronization and background processing to enrich catalog titles with streaming provider data:
+
+### 1. Workflow & Endpoints
+- **Queue Synchronization (`POST /api/v1/titles/{title_id}/sync`)**:
+  - Requires Bearer authentication.
+  - Accepts optional `external_id` (defaults to stringified `title_id`) and `provider` name.
+  - Immediately validates title existence in the database.
+  - Returns `HTTP 202 Accepted` with a unique `task_id` (`UUIDv4`) and schedules execution outside the request-response cycle via `FastAPI.BackgroundTasks`.
+- **Observable Task Status (`GET /api/v1/titles/sync/tasks/{task_id}`)**:
+  - Provides execution status (`pending`, `in_progress`, `completed`, `failed`), timestamps, synced fields, and diagnostic error messages.
+
+### 2. Asynchronous External HTTP Client
+- Managed via `src/core/http_client.py` using `httpx.AsyncClient`.
+- Lifespan-managed initialization on FastAPI startup and graceful disposal on shutdown.
+- Configured with strict timeouts (`connect=5.0s`, `read=10.0s`, configurable via `EXTERNAL_API_TIMEOUT_SECONDS`) and connection pooling (10 keepalive, 20 max connections).
+- Non-blocking I/O throughout: route handlers and tasks never block the Python event loop.
+- Sensitive credentials (tokens, API keys, passwords) in URLs are automatically sanitized and masked in application logs via `sanitize_url`.
+
+### 3. Resilience, Retries & Error Handling
+- Bounded retries: Transient network errors (timeouts, connection refused, HTTP 5xx responses) are retried up to 2 times (`EXTERNAL_API_MAX_RETRIES`) using exponential backoff ($0.5\text{s} \times 2^{\text{attempt}}$).
+- Non-retryable errors: Client errors (`HTTP 404 Not Found`, invalid schemas, or malformed JSON payloads) fail fast and record clear diagnostics without polluting logs or retrying fruitlessly.
+- Data integrity: External failures never corrupt existing PostgreSQL data. If external data cannot be fetched or parsed, the transaction is cleanly aborted, and the background task records a `failed` status.
+
+### 4. Database Session Isolation & Cache Invalidation
+- **Session Isolation**: Background tasks never reuse the caller's request database session (which closes when the HTTP response completes). The task creates its own isolated session using `async with SessionLocal() as db:`.
+- **Post-Commit Invalidation**: When title metadata updates successfully commit in PostgreSQL, `cache_service.invalidate_catalog(title_id=title_id)` is invoked, ensuring stale cache entries in Redis are purged immediately.
+
+### 5. Architectural Trade-offs & Limitations
+- **FastAPI BackgroundTasks vs. Celery**:
+  - `FastAPI.BackgroundTasks` was chosen because it provides the simplest, zero-overhead architecture that satisfies all project requirements without adding heavy worker daemons, Celery brokers, or separate container services.
+  - **Limitation**: `FastAPI.BackgroundTasks` executes in-memory within the Uvicorn application process. Tasks **do not persist across server restarts or process termination**. If durable delivery, cross-restart persistence, or independently scalable worker nodes are required in future phases, a Celery worker pool with Redis as the message broker can be introduced with the same task logic.
+
+---
+
 ## Running Tests
 
-Run the complete test suite (all unit, integration, PostgreSQL, and Redis tests):
+Run the complete test suite (all unit, integration, PostgreSQL, Redis, and background tests):
 
 ```powershell
 python -m pytest -v
@@ -501,22 +544,27 @@ python -m pytest -v
 
 ### Specific Test Suites
 
-1. **Redis Caching Unit Tests** (Key hashing, URL sanitization, outage tolerance, mock failures):
+1. **Background Processing & External HTTP Tests** (Mocked HTTPX, timeout, retry, lifecycle, isolation & task status):
+   ```powershell
+   python -m pytest tests/test_background_and_external_http.py -v
+   ```
+
+2. **Redis Caching Unit Tests** (Key hashing, URL sanitization, outage tolerance, mock failures):
    ```powershell
    python -m pytest tests/test_redis_caching_unit.py -v
    ```
 
-2. **Live Redis Integration Tests** (Real connection, TTL expiration, cache hits, invalidation against Docker Redis):
+3. **Live Redis Integration Tests** (Real connection, TTL expiration, cache hits, invalidation against Docker Redis):
    ```powershell
    python -m pytest tests/test_redis_integration.py -v
    ```
 
-3. **PostgreSQL Integration Tests** (Real database persistence, migrations, and CRUD):
+4. **PostgreSQL Integration Tests** (Real database persistence, migrations, and CRUD):
    ```powershell
    python -m pytest tests/test_postgresql_integration.py -v
    ```
 
-4. **Catalog Search, Filter, Sort & Pagination Tests**:
+5. **Catalog Search, Filter, Sort & Pagination Tests**:
    ```powershell
    python -m pytest tests/test_catalog_search_and_pagination.py -v
    ```
@@ -537,18 +585,25 @@ ott-content-aggregator/
 │   ├── core/
 │   │   ├── cache.py              # Redis client lifecycle, pooling, URL masking & health
 │   │   ├── database.py           # SQLAlchemy 2.0 engine, settings & session factory
+│   │   ├── http_client.py        # Shared async HTTPX client, connection pooling & URL masking
 │   │   └── security.py           # Password hashing & JWT token management
 │   ├── models/                   # SQLAlchemy 2.0 ORM models (Title, User)
 │   ├── schemas/                  # Pydantic v2 validation models
+│   │   ├── sync.py               # Background task and external metadata schemas
+│   │   ├── title.py
+│   │   └── user.py
 │   ├── services/
 │   │   ├── auth_service.py       # Authentication & user registration service
+│   │   ├── background_tasks.py   # Background task runner, session isolation & status registry
 │   │   ├── cache_service.py      # Catalog caching, deterministic keys & invalidation
-│   │   └── catalog_service.py    # Database catalog CRUD, search, filter & pagination
+│   │   ├── catalog_service.py    # Database catalog CRUD, search, filter & pagination
+│   │   └── external_provider_service.py # Non-blocking external HTTP service with retries
 │   └── main.py                   # FastAPI application factory, lifespan & health
 ├── tests/
 │   ├── test_api_defects_and_contract.py
 │   ├── test_auth_api.py
 │   ├── test_auth_service.py
+│   ├── test_background_and_external_http.py # Task 5 async HTTP & background tests
 │   ├── test_catalog_search_and_pagination.py
 │   ├── test_migration_and_startup.py
 │   ├── test_migrations.py
