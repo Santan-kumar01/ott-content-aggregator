@@ -877,3 +877,36 @@ async def test_health_endpoint_stays_healthy_when_database_fails(
 
     assert response.status_code == 200
     assert response.json() == {"status": "healthy"}
+
+@pytest.mark.anyio
+async def test_paginated_titles_offset_beyond_total_returns_empty_items(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+):
+    for i in range(2):
+        response = await client.post(
+            "/api/v1/titles",
+            json={
+                "name": f"Offset Boundary Movie {i}",
+                "description": "Pagination boundary test",
+                "content_type": "movie",
+                "release_year": 2024,
+                "genre": "Drama",
+                "platform": "Netflix",
+            },
+            headers=auth_headers,
+        )
+        assert response.status_code == 201, response.text
+
+    response = await client.get(
+        "/api/v1/titles/paginated?skip=2&limit=1"
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+
+    assert data["items"] == []
+    assert data["total"] == 2
+    assert data["skip"] == 2
+    assert data["limit"] == 1
+    assert data["has_next"] is False
