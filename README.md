@@ -106,6 +106,8 @@ ACCESS_TOKEN_EXPIRE_MINUTES=30
 
 # Redis Cache
 REDIS_URL=redis://localhost:6379/0
+CACHE_TTL_SECONDS=300
+CACHE_ENABLED=true
 ```
 
 > [!CAUTION]
@@ -114,39 +116,69 @@ REDIS_URL=redis://localhost:6379/0
 
 ---
 
-### 4. Database Setup
+### 4. Database & Cache Infrastructure Setup
 
-#### Using Docker (Recommended)
+#### Option A: Using Docker Compose (Recommended)
 
-Start a PostgreSQL 16 container with a persistent named volume:
-
-```powershell
-docker run -d `
-  --name ott-postgres `
-  -e POSTGRES_USER=postgres `
-  -e POSTGRES_PASSWORD=postgres `
-  -e POSTGRES_DB=ott_db `
-  -p 5432:5432 `
-  -v ott_postgres_data:/var/lib/postgresql/data `
-  postgres:16-alpine
-```
-
-*(Optional)* Start a Redis container for caching:
+Start both PostgreSQL 16 and Redis 7 containers together with automated health checks:
 
 ```powershell
-docker run -d `
-  --name ott-redis `
-  -p 6379:6379 `
-  redis:7-alpine
+docker compose up -d
 ```
 
-#### Using Native PostgreSQL
+Verify service status and health checks:
 
-If using a local PostgreSQL service, create the database user and database:
+```powershell
+docker compose ps
+```
+
+#### Option B: Using Individual Docker Containers
+
+1. **Start PostgreSQL 16** with a persistent named volume:
+
+   ```powershell
+   docker run -d `
+     --name ott-postgres `
+     -e POSTGRES_USER=postgres `
+     -e POSTGRES_PASSWORD=postgres `
+     -e POSTGRES_DB=ott_db `
+     -p 5432:5432 `
+     -v ott_postgres_data:/var/lib/postgresql/data `
+     postgres:16-alpine
+   ```
+
+2. **Start Redis 7** for catalog caching:
+
+   ```powershell
+   docker run -d `
+     --name ott-redis `
+     -p 6379:6379 `
+     redis:7-alpine
+   ```
+
+3. **Verify Connectivity**:
+
+   ```powershell
+   # Check PostgreSQL readiness
+   docker exec -it ott-postgres pg_isready -U postgres -d ott_db
+
+   # Check Redis responsiveness
+   docker exec -it ott-redis redis-cli ping
+   ```
+
+#### Option C: Native Local Installation
+
+If running services natively on your host machine:
 
 ```sql
+-- PostgreSQL
 CREATE USER postgres WITH PASSWORD 'postgres';
 CREATE DATABASE ott_db OWNER postgres;
+```
+
+```powershell
+# Redis native service check
+redis-cli ping
 ```
 
 ---
@@ -435,21 +467,59 @@ The `total` field reflects the total number of records matching all active searc
 
 ---
 
+## Redis Caching Architecture
+
+The application uses production-conscious asynchronous Redis caching to accelerate catalog queries while guaranteeing consistency with PostgreSQL:
+
+### 1. Key Design & Deterministic Normalization
+- All catalog queries (`GET /api/v1/titles` and `GET /api/v1/titles/paginated`) compute deterministic SHA-256 hashes of normalized query parameters (stripped, lowercased string filters, integers, sort direction, and pagination boundaries).
+- Key format: `catalog:v{generation}:{endpoint_type}:{sha256_param_hash}`.
+- Single title key format: `catalog:v{generation}:title:{title_id}`.
+
+### 2. Atomic Invalidation via Versioned Generation
+- A monotonic Redis counter (`catalog:generation`) represents the active cache version.
+- On any title write (`POST /api/v1/titles`, `PATCH /api/v1/titles/{id}`, `DELETE /api/v1/titles/{id}`), invalidation executes **only after the database transaction commits successfully**.
+- Invalidation increments `catalog:generation` via atomic `INCR`.
+- All query permutations across search, filters, sorting, and pagination immediately point to the new generation in $O(1)$ time. Obsolete keys expire naturally via their TTL (default 300s).
+
+### 3. Graceful Outage Resilience & Cache Bypass
+- If Redis is unavailable or times out:
+  - Cache reads bypass cleanly and query PostgreSQL directly without throwing HTTP 500 errors.
+  - Database writes commit successfully and flag a pending invalidation state.
+  - When Redis reconnects, the generation counter is automatically bumped to ensure no pre-outage cache entries are served stale.
+- The `/health` endpoint reports `"redis": "connected"` or `"redis": "disconnected"` without failing the application status while PostgreSQL remains connected.
+
+---
+
 ## Running Tests
 
-Run the complete test suite:
-
-```powershell
-python -m pytest
-```
-
-To run with verbose output and test names:
+Run the complete test suite (all unit, integration, PostgreSQL, and Redis tests):
 
 ```powershell
 python -m pytest -v
 ```
 
-The test suite runs against an isolated async SQLite test database (`aiosqlite`), ensuring fast, reliable, and side-effect-free execution without depending on external network services.
+### Specific Test Suites
+
+1. **Redis Caching Unit Tests** (Key hashing, URL sanitization, outage tolerance, mock failures):
+   ```powershell
+   python -m pytest tests/test_redis_caching_unit.py -v
+   ```
+
+2. **Live Redis Integration Tests** (Real connection, TTL expiration, cache hits, invalidation against Docker Redis):
+   ```powershell
+   python -m pytest tests/test_redis_integration.py -v
+   ```
+
+3. **PostgreSQL Integration Tests** (Real database persistence, migrations, and CRUD):
+   ```powershell
+   python -m pytest tests/test_postgresql_integration.py -v
+   ```
+
+4. **Catalog Search, Filter, Sort & Pagination Tests**:
+   ```powershell
+   python -m pytest tests/test_catalog_search_and_pagination.py -v
+   ```
 
 ---
 
@@ -458,22 +528,41 @@ The test suite runs against an isolated async SQLite test database (`aiosqlite`)
 ```text
 ott-content-aggregator/
 ├── alembic/                      # Alembic database migrations
-│   ├── versions/                 # Migration scripts (0001, 0002)
+│   ├── versions/                 # Version-controlled migration scripts (0001, 0002)
 │   └── env.py                    # Async migration runner environment
 ├── src/
 │   ├── api/
 │   │   ├── dependencies/         # Dependency injection (database, auth)
 │   │   └── endpoints/            # Route controllers (titles, auth)
-│   ├── core/                     # Application configuration & security
+│   ├── core/
+│   │   ├── cache.py              # Redis client lifecycle, pooling, URL masking & health
+│   │   ├── database.py           # SQLAlchemy 2.0 engine, settings & session factory
+│   │   └── security.py           # Password hashing & JWT token management
 │   ├── models/                   # SQLAlchemy 2.0 ORM models (Title, User)
 │   ├── schemas/                  # Pydantic v2 validation models
-│   ├── services/                 # Business logic & repository layers
-│   └── main.py                   # FastAPI application factory & lifespan
-├── tests/                        # Comprehensive pytest suite
-├── .env.example                  # Environment configuration template
+│   ├── services/
+│   │   ├── auth_service.py       # Authentication & user registration service
+│   │   ├── cache_service.py      # Catalog caching, deterministic keys & invalidation
+│   │   └── catalog_service.py    # Database catalog CRUD, search, filter & pagination
+│   └── main.py                   # FastAPI application factory, lifespan & health
+├── tests/
+│   ├── test_api_defects_and_contract.py
+│   ├── test_auth_api.py
+│   ├── test_auth_service.py
+│   ├── test_catalog_search_and_pagination.py
+│   ├── test_migration_and_startup.py
+│   ├── test_migrations.py
+│   ├── test_postgresql_integration.py
+│   ├── test_redis_caching_unit.py      # Redis unit & resilience tests
+│   ├── test_redis_integration.py       # Live Redis integration tests
+│   ├── test_security.py
+│   ├── test_title_protection.py
+│   └── test_user_model_schemas.py
+├── docker-compose.yml            # Docker Compose service definition (PostgreSQL & Redis)
 ├── alembic.ini                   # Alembic configuration
 ├── requirements.txt              # Production and development dependencies
-└── README.md                     # Project documentation
+├── .env.example                  # Environment configuration template
+└── README.md                     # Comprehensive project documentation
 ```
 
 ---

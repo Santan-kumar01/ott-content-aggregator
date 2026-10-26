@@ -12,7 +12,7 @@ from src.schemas.title import (
     TitleRead,
     TitleUpdate,
 )
-from src.services import catalog_service
+from src.services import cache_service, catalog_service
 
 router = APIRouter(prefix="/titles", tags=["Catalog"])
 
@@ -30,7 +30,9 @@ async def create_title(
     db: DBSession,
     current_user: CurrentUser,
 ):
-    return await catalog_service.create_title(db, data)
+    title = await catalog_service.create_title(db, data)
+    await cache_service.invalidate_catalog()
+    return title
 
 
 @router.get(
@@ -92,7 +94,20 @@ async def list_titles(
         description="Maximum number of titles to return (1–100).",
     ),
 ):
-    return await catalog_service.list_titles(
+    cached = await cache_service.get_catalog_list(
+        genre=genre,
+        platform=platform,
+        search=search,
+        release_year=release_year,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        skip=skip,
+        limit=limit,
+    )
+    if cached is not None:
+        return cached
+
+    titles = await catalog_service.list_titles(
         db,
         genre=genre,
         platform=platform,
@@ -103,6 +118,21 @@ async def list_titles(
         skip=skip,
         limit=limit,
     )
+    serialized = [
+        TitleRead.model_validate(t).model_dump(mode="json") for t in titles
+    ]
+    await cache_service.set_catalog_list(
+        data=serialized,
+        genre=genre,
+        platform=platform,
+        search=search,
+        release_year=release_year,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        skip=skip,
+        limit=limit,
+    )
+    return titles
 
 
 @router.get(
@@ -162,6 +192,19 @@ async def list_titles_paginated(
         description="Maximum number of titles to return (1–100).",
     ),
 ):
+    cached = await cache_service.get_catalog_paginated(
+        genre=genre,
+        platform=platform,
+        search=search,
+        release_year=release_year,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        skip=skip,
+        limit=limit,
+    )
+    if cached is not None:
+        return cached
+
     items, total = await catalog_service.list_titles_paginated(
         db,
         genre=genre,
@@ -174,13 +217,27 @@ async def list_titles_paginated(
         limit=limit,
     )
 
-    return {
-        "items": items,
+    response_payload = {
+        "items": [
+            TitleRead.model_validate(t).model_dump(mode="json") for t in items
+        ],
         "total": total,
         "skip": skip,
         "limit": limit,
         "has_next": skip + len(items) < total,
     }
+    await cache_service.set_catalog_paginated(
+        data=response_payload,
+        genre=genre,
+        platform=platform,
+        search=search,
+        release_year=release_year,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        skip=skip,
+        limit=limit,
+    )
+    return response_payload
 
 
 @router.get("/{title_id}", response_model=TitleRead)
@@ -188,9 +245,16 @@ async def get_title(
     title_id: Annotated[int, Path(gt=0, description="The ID of the title to retrieve")],
     db: DBSession,
 ):
+    cached = await cache_service.get_title(title_id)
+    if cached is not None:
+        return cached
+
     title = await catalog_service.get_title(db, title_id)
     if title is None:
         raise HTTPException(status_code=404, detail="Title not found")
+
+    serialized = TitleRead.model_validate(title).model_dump(mode="json")
+    await cache_service.set_title(title_id, serialized)
     return title
 
 
@@ -204,7 +268,9 @@ async def update_title(
     title = await catalog_service.get_title(db, title_id)
     if title is None:
         raise HTTPException(status_code=404, detail="Title not found")
-    return await catalog_service.update_title(db, title, data)
+    updated_title = await catalog_service.update_title(db, title, data)
+    await cache_service.invalidate_catalog(title_id=title_id)
+    return updated_title
 
 
 @router.delete("/{title_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -217,3 +283,4 @@ async def delete_title(
     if title is None:
         raise HTTPException(status_code=404, detail="Title not found")
     await catalog_service.delete_title(db, title)
+    await cache_service.invalidate_catalog(title_id=title_id)
