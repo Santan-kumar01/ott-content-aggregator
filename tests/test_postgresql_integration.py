@@ -251,3 +251,55 @@ async def test_postgres_catalog_crud_and_persistence(
                 {"id": title_id},
             )
             assert check_del.scalar() == 0
+
+
+@pytest.mark.anyio
+async def test_postgres_alembic_head_and_schema_parity(pg_engine):
+    """Verify Alembic migration head matches PostgreSQL schema and table constraints."""
+    async with pg_engine.connect() as conn:
+        # 1. Verify alembic_version table exists and reports head
+        rev_res = await conn.execute(text("SELECT version_num FROM alembic_version"))
+        current_rev = rev_res.scalar()
+        assert current_rev == "497ce7b6dfad", f"Expected head 497ce7b6dfad, got {current_rev}"
+
+        # 2. Verify tables exist in PostgreSQL
+        tab_res = await conn.execute(
+            text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+        )
+        tables = {r[0] for r in tab_res.fetchall()}
+        assert "users" in tables
+        assert "titles" in tables
+        assert "alembic_version" in tables
+
+        # 3. Verify users columns
+        u_col_res = await conn.execute(
+            text("SELECT column_name FROM information_schema.columns WHERE table_name = 'users'")
+        )
+        u_cols = {r[0] for r in u_col_res.fetchall()}
+        assert {"id", "email", "username", "hashed_password", "is_active", "is_superuser", "created_at"}.issubset(u_cols)
+
+        # 4. Verify titles columns
+        t_col_res = await conn.execute(
+            text("SELECT column_name FROM information_schema.columns WHERE table_name = 'titles'")
+        )
+        t_cols = {r[0] for r in t_col_res.fetchall()}
+        assert {"id", "name", "description", "content_type", "release_year", "genre", "platform", "created_at"}.issubset(t_cols)
+
+        # 5. Verify transaction rollback works under unique constraint violation
+        await conn.rollback()
+        trans = await conn.begin()
+        try:
+            # Attempt duplicate insert violating unique email
+            await conn.execute(
+                text("INSERT INTO users (email, username, hashed_password) VALUES ('pg_tester@example.com', 'dupe_test', 'hash123')")
+            )
+        except Exception:
+            await trans.rollback()
+        else:
+            await trans.commit()
+            pytest.fail("Duplicate email insert should have violated unique constraint")
+
+        # Session connection is healthy post-rollback
+        ping_res = await conn.execute(text("SELECT 1"))
+        assert ping_res.scalar() == 1
+

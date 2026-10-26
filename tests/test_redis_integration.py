@@ -101,16 +101,16 @@ async def test_real_redis_ttl_expiration(live_redis_check):
     """Verify keys in real Redis expire naturally based on configured TTL."""
     client = get_redis_client()
     test_key = "test:ttl_expiration_key"
-    await client.set(test_key, "expiring_payload", ex=1)
+    await client.set(test_key, "expiring_payload", ex=2)
 
-    # Check key exists and has TTL <= 1
+    # Check key exists and has TTL <= 2
     ttl = await client.ttl(test_key)
-    assert 0 < ttl <= 1
+    assert 0 < ttl <= 2
     val = await client.get(test_key)
     assert val == "expiring_payload"
 
     # Wait for TTL expiration
-    await asyncio.sleep(1.2)
+    await asyncio.sleep(2.2)
     expired_val = await client.get(test_key)
     assert expired_val is None
 

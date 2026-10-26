@@ -536,38 +536,111 @@ The application supports asynchronous external metadata synchronization and back
 
 ## Running Tests
 
-Run the complete test suite (all unit, integration, PostgreSQL, Redis, and background tests):
+### 1. Test Architecture & Environment Safety
 
+The test suite is structured into isolated unit tests and live integration test modules:
+- **Fast In-Memory Tests (SQLite + Mocked Redis)**: Run automatically with zero external dependencies using `sqlite+aiosqlite:///:memory:`. All unit, validation, auth contract, and mock tests run deterministically in seconds.
+- **Genuine PostgreSQL Integration Tests**: Run against an actual PostgreSQL 16 container (`ott-postgres`) to verify real database transactions, unique constraints, and schema parity without substituting SQLite.
+- **Genuine Redis Integration Tests**: Run against a real Redis 7 container (`ott-redis`) to verify live connection pooling, cache hits/misses, TTL expiration, and multi-version invalidation.
+- **Cross-Component Integration Tests**: Exercise authenticated catalog writes followed by cached reads, PATCH/DELETE invalidation lifecycles, database rollback consistency, Redis outage resilience & recovery, and background task failure observability.
+
+---
+
+### 2. Environment Variables for Integration Testing
+
+| Environment Variable | Default Value | Description |
+| :--- | :--- | :--- |
+| `POSTGRES_TEST_URL` | `postgresql+asyncpg://postgres:postgres@localhost:5432/ott_test_db` | Connection string to dedicated disposable PostgreSQL integration test database |
+| `REDIS_URL` | `redis://localhost:6379/0` | Connection string to live Redis cache server |
+| `CACHE_ENABLED` | `true` | Master toggle to enable or bypass Redis caching logic |
+| `CACHE_TTL_SECONDS` | `300` | Default cache expiration lifetime in seconds |
+| `EXTERNAL_API_TIMEOUT_SECONDS` | `10.0` | Read timeout for external provider requests |
+| `EXTERNAL_API_MAX_RETRIES` | `2` | Number of exponential backoff retry attempts for transient HTTP failures |
+
+---
+
+### 3. Setting Up Live Integration Services (Docker)
+
+To run live PostgreSQL and Redis integration tests, start the container services via Docker:
+
+```powershell
+# Start existing containers or start via docker compose
+docker compose up -d db redis
+# Or start existing containers:
+docker start ott-postgres ott-redis
+```
+
+Verify services are running and listening on localhost:
+```powershell
+docker ps
+```
+
+---
+
+### 4. Running Test Commands
+
+#### Run the Full Automated Test Suite
 ```powershell
 python -m pytest -v
 ```
 
-### Specific Test Suites
+#### Run with Code Coverage Analysis
+```powershell
+# Terminal report with missing lines
+python -m pytest --cov=src --cov-report=term-missing
 
-1. **Background Processing & External HTTP Tests** (Mocked HTTPX, timeout, retry, lifecycle, isolation & task status):
+# Generate interactive HTML coverage report in htmlcov/
+python -m pytest --cov=src --cov-report=html
+```
+
+#### Specific Test Modules
+
+1. **Cross-Component Integration Tests** (Auth edge cases, CRUD + cache hit/miss flow, DB rollback, Redis outage & recovery):
    ```powershell
-   python -m pytest tests/test_background_and_external_http.py -v
+   python -m pytest tests/test_cross_component_integration.py -v
    ```
 
-2. **Redis Caching Unit Tests** (Key hashing, URL sanitization, outage tolerance, mock failures):
-   ```powershell
-   python -m pytest tests/test_redis_caching_unit.py -v
-   ```
-
-3. **Live Redis Integration Tests** (Real connection, TTL expiration, cache hits, invalidation against Docker Redis):
-   ```powershell
-   python -m pytest tests/test_redis_integration.py -v
-   ```
-
-4. **PostgreSQL Integration Tests** (Real database persistence, migrations, and CRUD):
+2. **PostgreSQL & Migration Integration Tests** (Real PostgreSQL engine, Alembic head verification, schema parity & persistence):
    ```powershell
    python -m pytest tests/test_postgresql_integration.py -v
    ```
 
-5. **Catalog Search, Filter, Sort & Pagination Tests**:
+3. **Live Redis Integration Tests** (Real Redis connection, TTL expiration, cache hits, invalidation against Docker Redis):
+   ```powershell
+   python -m pytest tests/test_redis_integration.py -v
+   ```
+
+4. **Redis Caching Unit & Resilience Tests** (Key hashing, URL sanitization, outage tolerance, mock failures):
+   ```powershell
+   python -m pytest tests/test_redis_caching_unit.py -v
+   ```
+
+5. **Background Processing & External HTTP Tests** (Task 5 async HTTP client, timeout, retries, session isolation & task status):
+   ```powershell
+   python -m pytest tests/test_background_and_external_http.py -v
+   ```
+
+6. **Authentication & Security Tests** (Password hashing, JWT generation, validation, role protection):
+   ```powershell
+   python -m pytest tests/test_auth_api.py tests/test_auth_service.py tests/test_security.py -v
+   ```
+
+7. **Catalog Search, Filter, Sort & Pagination Tests**:
    ```powershell
    python -m pytest tests/test_catalog_search_and_pagination.py -v
    ```
+
+8. **Alembic Schema & Migration Lifecycle Tests** (Upgrade, downgrade, re-upgrade on clean disposable DB):
+   ```powershell
+   python -m pytest tests/test_migrations.py tests/test_migration_and_startup.py -v
+   ```
+
+---
+
+### 5. Known Test Limitations
+
+- **FastAPI BackgroundTasks In-Process Execution**: Tasks execute asynchronously in the background within the active process event loop. If the application server process terminates abruptly, in-flight background jobs are not preserved in a durable queue.
+- **Docker Dependency for Live Integration**: If Docker is not running on the host machine, `test_postgresql_integration.py` will report connection failure, and `test_redis_integration.py` will skip gracefully with an informative message (`Live Redis service on localhost:6379 is not reachable`) rather than falsely claiming successful integration.
 
 ---
 
@@ -576,7 +649,7 @@ python -m pytest -v
 ```text
 ott-content-aggregator/
 ├── alembic/                      # Alembic database migrations
-│   ├── versions/                 # Version-controlled migration scripts (0001, 0002)
+│   ├── versions/                 # Version-controlled migration scripts (0001, 0002, 497ce7b6dfad)
 │   └── env.py                    # Async migration runner environment
 ├── src/
 │   ├── api/
@@ -605,11 +678,12 @@ ott-content-aggregator/
 │   ├── test_auth_service.py
 │   ├── test_background_and_external_http.py # Task 5 async HTTP & background tests
 │   ├── test_catalog_search_and_pagination.py
+│   ├── test_cross_component_integration.py  # Task 6 cross-component integration tests
 │   ├── test_migration_and_startup.py
 │   ├── test_migrations.py
-│   ├── test_postgresql_integration.py
-│   ├── test_redis_caching_unit.py      # Redis unit & resilience tests
-│   ├── test_redis_integration.py       # Live Redis integration tests
+│   ├── test_postgresql_integration.py       # Genuine PostgreSQL integration tests
+│   ├── test_redis_caching_unit.py           # Redis unit & resilience tests
+│   ├── test_redis_integration.py            # Live Redis integration tests
 │   ├── test_security.py
 │   ├── test_title_protection.py
 │   └── test_user_model_schemas.py
