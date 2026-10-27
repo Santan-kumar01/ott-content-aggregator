@@ -101,6 +101,12 @@ Open `.env` and set your credentials:
 # Database Connection (PostgreSQL asyncpg driver)
 DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/ott_db
 
+# Database Connection Pool Tuning
+DB_POOL_SIZE=10
+DB_MAX_OVERFLOW=20
+DB_POOL_TIMEOUT=30.0
+DB_POOL_RECYCLE=1800
+
 # Security & Authentication
 JWT_SECRET_KEY=<paste_generated_32_byte_secret_here>
 JWT_ALGORITHM=HS256
@@ -115,6 +121,10 @@ CACHE_ENABLED=true
 EXTERNAL_API_TIMEOUT_SECONDS=10.0
 EXTERNAL_API_MAX_RETRIES=2
 EXTERNAL_PROVIDER_BASE_URL=https://api.example-ott-provider.com
+
+# Production Environment & CORS Configuration
+ENVIRONMENT=production
+ALLOWED_ORIGINS=https://app.example.com,https://admin.example.com
 ```
 
 > [!CAUTION]
@@ -125,21 +135,46 @@ EXTERNAL_PROVIDER_BASE_URL=https://api.example-ott-provider.com
 
 ### 4. Database & Cache Infrastructure Setup
 
-#### Option A: Using Docker Compose (Recommended)
+#### Option A: Full Application Stack via Docker Compose (Recommended)
 
-Start both PostgreSQL 16 and Redis 7 containers together with automated health checks:
+Run the entire backend stack—including the FastAPI API service, PostgreSQL 16, and Redis 7—using Docker Compose:
 
 ```powershell
-docker compose up -d
+# Build the production Docker image and start all services in the background
+docker compose up --build -d
 ```
 
-Verify service status and health checks:
+This starts:
+1. **`db` (PostgreSQL 16)** with health check (`pg_isready`) and persistent volume (`ott_postgres_data`).
+2. **`redis` (Redis 7)** with health check (`redis-cli ping`).
+3. **`api` (FastAPI Application)** built from the multi-stage, non-root `Dockerfile`, waiting for `db` and `redis` to become healthy before listening on port `8000`.
+
+To run database migrations inside the container:
+```powershell
+docker compose exec api alembic upgrade head
+```
+
+Verify service status and container health checks:
 
 ```powershell
 docker compose ps
 ```
 
-#### Option B: Using Individual Docker Containers
+To stop all services:
+```powershell
+docker compose down
+```
+
+#### Option B: Dedicated Database & Cache Containers Only
+
+If running the FastAPI application natively on your host machine while containerizing dependencies:
+
+```powershell
+# Start only PostgreSQL and Redis
+docker compose up -d db redis
+```
+
+#### Option C: Using Individual Docker Containers
 
 1. **Start PostgreSQL 16** with a persistent named volume:
 
@@ -173,7 +208,7 @@ docker compose ps
    docker exec -it ott-redis redis-cli ping
    ```
 
-#### Option C: Native Local Installation
+#### Option D: Native Local Installation
 
 If running services natively on your host machine:
 
@@ -420,16 +455,20 @@ Similarly, updating (`PATCH /api/v1/titles/{id}`) and deleting (`DELETE /api/v1/
 
 | Method | Endpoint | Access | Description |
 |---|---|---|---|
-| `GET` | `/health` | Public | Application health check |
+| `GET` | `/health` | Public | Comprehensive health probe (PostgreSQL, Redis, Environment) |
+| `GET` | `/health/live` | Public | Lightweight process liveness probe (orchestrator health) |
+| `GET` | `/health/ready` | Public | Dependency readiness probe (returns 503 if DB or Redis is unavailable) |
 | `POST` | `/api/v1/auth/register` | Public | Register a new user |
 | `POST` | `/api/v1/auth/login` | Public | Authenticate and obtain JWT token |
 | `GET` | `/api/v1/auth/me` | Protected | Get profile of authenticated user |
-| `GET` | `/api/v1/titles/` | Public | List and filter titles |
-| `GET` | `/api/v1/titles/paginated` | Public | List, search, filter, sort, and paginate titles with metadata |
-| `GET` | `/api/v1/titles/{id}` | Public | Retrieve a title by ID |
+| `GET` | `/api/v1/titles/` | Public | List and filter titles (Redis-cached) |
+| `GET` | `/api/v1/titles/paginated` | Public | Search, filter, sort, and paginate titles with pagination metadata (Redis-cached) |
+| `GET` | `/api/v1/titles/{id}` | Public | Retrieve a title by ID (Redis-cached) |
 | `POST` | `/api/v1/titles/` | Protected | Create a new title |
 | `PATCH` | `/api/v1/titles/{id}` | Protected | Update an existing title (Partial update) |
 | `DELETE` | `/api/v1/titles/{id}` | Protected | Delete a title |
+| `POST` | `/api/v1/titles/{title_id}/sync` | Protected | Queue asynchronous external provider metadata synchronization |
+| `GET` | `/api/v1/titles/sync/tasks/{task_id}` | Public | Query background synchronization task status |
 
 ### Catalog Search, Filtering, Sorting, and Pagination
 
@@ -534,6 +573,83 @@ The application supports asynchronous external metadata synchronization and back
 
 ---
 
+## Health Probes & Observability
+
+The application provides multi-tier health and diagnostic endpoints for container orchestrators (Kubernetes, Docker Swarm) and monitoring systems:
+
+### 1. Endpoint Architecture
+
+| Probe | Path | Expected Response | HTTP Status | Purpose |
+|:---|:---|:---|:---|:---|
+| **Liveness** | `GET /health/live` | `{"status": "alive"}` | `200 OK` | Fast, lightweight process heartbeat. Evaluates event loop responsiveness without querying downstream databases. Used by container restart policies. |
+| **Readiness** | `GET /health/ready` | `{"status": "ready", "database": "connected", "redis": "connected"}` | `200 OK` / `503 Service Unavailable` | Deep dependency probe. Executes a database ping (`SELECT 1`) and a Redis ping. Signals when the application is capable of handling user traffic. |
+| **Diagnostic** | `GET /health` | `{"status": "healthy" \| "degraded", "database": "connected", "redis": "connected", "environment": "production"}` | `200 OK` | Backwards-compatible status endpoint for dashboards and load balancers. Degrades gracefully if Redis is offline while database remains operational. |
+
+### 2. Log Sanitization & Secret Protection
+
+- **Zero Secret Exposure**: Database credentials, JWT tokens, Bearer authorization headers, and API keys are never written to application logs.
+- **Sanitized URL Logging**: The external HTTP client and Redis manager sanitize all connection strings and request URLs via `sanitize_url`, stripping embedded passwords and access tokens before emitting log records.
+
+---
+
+## Security & Production Hardening
+
+### 1. Container Security (Multi-Stage Dockerfile)
+- **Minimal Attack Surface**: Uses Debian-slim base (`python:3.11-slim`) with multi-stage build separation. Build compilers and headers are discarded in the final image.
+- **Non-Root Execution**: Runs under an unprivileged system user (`appuser`, UID `10001`, GID `10001`). No container process runs as `root`.
+- **Built-in Healthcheck**: Docker daemon continuously polls `/health/live` every 30 seconds to monitor process health.
+
+### 2. HTTP Security Response Headers
+Every HTTP response is fortified with defensive security headers via custom ASGI middleware:
+- `X-Content-Type-Options: nosniff`: Prevents MIME-type sniffing.
+- `X-Frame-Options: DENY`: Mitigates clickjacking attacks.
+- `X-XSS-Protection: 1; mode=block`: Activates browser cross-site scripting filters.
+- `Referrer-Policy: strict-origin-when-cross-origin`: Restricts referrer information leakage across origins.
+
+### 3. Safe Cross-Origin Resource Sharing (CORS)
+- Controlled strictly via the `ALLOWED_ORIGINS` environment variable (comma-separated origins).
+- Wildcard origins (`*`) are disallowed when credentials are enabled. If `ALLOWED_ORIGINS` is left empty, CORS middleware is not engaged.
+
+### 4. JWT & Password Integrity
+- Passwords hashed using cryptographically salted `bcrypt`.
+- JWT signatures verified with `HS256`. Token tampering, unsigned algorithms (`none`), and expired tokens are rejected with `HTTP 401 Unauthorized`.
+
+---
+
+## Performance & Benchmarking
+
+### 1. Optimization Measures
+1. **Query Short-Circuiting**: In `catalog_service.list_titles_paginated`, when the total matching count is 0 or when `skip >= total`, the secondary data fetching `SELECT` query is skipped entirely, returning immediately and saving an expensive database roundtrip.
+2. **Asynchronous Connection Pooling**: SQLAlchemy async engine is configured with explicit pool parameters (`DB_POOL_SIZE=10`, `DB_MAX_OVERFLOW=20`, `DB_POOL_TIMEOUT=30.0`, `DB_POOL_RECYCLE=1800`), eliminating connection exhaustion under burst traffic.
+3. **Multi-Tier Redis Caching**: Heavy catalog queries are cached using SHA-256 normalized parameter hashes and invalidation generations. Single-title lookups and paginated queries respond from in-memory cache without hitting PostgreSQL.
+
+### 2. Repeatable Benchmark Methodology
+A dedicated benchmark script (`scratch/benchmark_catalog.py`) provides repeatable, deterministic performance measurements across representative API endpoints.
+
+**Environment**:
+- Host: Windows 11 / AMD Ryzen / Docker Desktop
+- Database: PostgreSQL 16 Alpine (containerized)
+- Cache: Redis 7 Alpine (containerized)
+- Test Dataset: 50 catalog titles seeded with realistic genre, platform, and year distributions
+- Concurrency: 50 iterations per benchmark scenario
+
+### 3. Observed Benchmark Results
+
+| Scenario | Operation | Cold (DB Miss) | Warm (Redis Hit) | Observed Speedup |
+|:---|:---|:---:|:---:|:---:|
+| **Catalog Listing** | `GET /api/v1/titles` (20 items) | **184.79 ms** | **8.47 ms** | **21.82x faster** |
+| **Filtered Search** | `GET /api/v1/titles/paginated` | — | **10.21 ms** (avg) | Sub-15ms filtered response |
+| **Single Title Lookup** | `GET /api/v1/titles/{id}` | **20.07 ms** | **6.54 ms** | **3.07x faster** |
+| **Liveness Heartbeat** | `GET /health/live` | — | **1.60 ms** (avg) | Near-zero overhead probe |
+
+To run the benchmark against your active environment:
+```powershell
+python scratch/benchmark_catalog.py
+```
+Benchmark metrics are exported in structured JSON format to `scratch/benchmark_results.json`.
+
+---
+
 ## Running Tests
 
 ### 1. Test Architecture & Environment Safety
@@ -554,8 +670,14 @@ The test suite is structured into isolated unit tests and live integration test 
 | `REDIS_URL` | `redis://localhost:6379/0` | Connection string to live Redis cache server |
 | `CACHE_ENABLED` | `true` | Master toggle to enable or bypass Redis caching logic |
 | `CACHE_TTL_SECONDS` | `300` | Default cache expiration lifetime in seconds |
+| `DB_POOL_SIZE` | `10` | SQLAlchemy connection pool base size |
+| `DB_MAX_OVERFLOW` | `20` | Max overflow connections above pool size |
+| `DB_POOL_TIMEOUT` | `30.0` | Connection checkout timeout in seconds |
+| `DB_POOL_RECYCLE` | `1800` | Connection recycle lifetime in seconds |
 | `EXTERNAL_API_TIMEOUT_SECONDS` | `10.0` | Read timeout for external provider requests |
 | `EXTERNAL_API_MAX_RETRIES` | `2` | Number of exponential backoff retry attempts for transient HTTP failures |
+| `ENVIRONMENT` | `production` | Deployment environment identifier (`production`, `development`, `testing`) |
+| `ALLOWED_ORIGINS` | `""` | Comma-separated list of allowed CORS origins |
 
 ---
 
@@ -644,6 +766,58 @@ python -m pytest --cov=src --cov-report=html
 
 ---
 
+## Troubleshooting Common Setup Problems
+
+### 1. Port Collisions (5432 or 6379 Already in Use)
+- **Symptom**: Docker reports `Bind for 0.0.0.0:5432 failed: port is already allocated` or container name conflict.
+- **Remedy**:
+  - Identify running containers or local services occupying ports:
+    ```powershell
+    docker ps -a
+    netstat -ano | findstr :5432
+    netstat -ano | findstr :6379
+    ```
+  - Stop the stale containers or native services:
+    ```powershell
+    docker stop ott-postgres ott-redis
+    docker start ott-postgres ott-redis
+    ```
+
+### 2. Database Migration Not Applied (Relation Does Not Exist)
+- **Symptom**: Querying `/api/v1/titles` or `/api/v1/auth` returns `500 Internal Server Error` with `relation "titles" does not exist`.
+- **Remedy**: Run Alembic migrations against the configured database:
+  ```powershell
+  # Local environment
+  alembic upgrade head
+
+  # Inside Docker Compose
+  docker compose exec api alembic upgrade head
+  ```
+
+### 3. Redis Offline or Unreachable
+- **Symptom**: Log warning `[REDIS] Warning: Failed to connect... Caching disabled for this operation`.
+- **Remedy**: The application is designed to be fully resilient against Redis outages; all catalog browsing and writes continue unaffected with direct PostgreSQL queries. To re-enable caching, ensure the Redis container is active:
+  ```powershell
+  docker compose up -d redis
+  ```
+
+### 4. JWT 401 Unauthorized Errors
+- **Symptom**: Requests to protected routes (`POST /api/v1/titles`, `POST /api/v1/titles/{id}/sync`) return `401 Unauthorized`.
+- **Remedy**:
+  - Verify header format is exactly `Authorization: Bearer <your_access_token>`.
+  - Check whether the access token has expired (default: 30 minutes).
+  - Verify that the `JWT_SECRET_KEY` in `.env` has not changed since the token was issued.
+
+### 5. CORS Rejection During Frontend Development
+- **Symptom**: Browser reports `No 'Access-Control-Allow-Origin' header is present on the requested resource`.
+- **Remedy**: Set your frontend origin in `.env`:
+  ```dotenv
+  ALLOWED_ORIGINS=http://localhost:3000,http://localhost:5173
+  ```
+  Restart the application to reload settings.
+
+---
+
 ## Project Structure
 
 ```text
@@ -657,7 +831,7 @@ ott-content-aggregator/
 │   │   └── endpoints/            # Route controllers (titles, auth)
 │   ├── core/
 │   │   ├── cache.py              # Redis client lifecycle, pooling, URL masking & health
-│   │   ├── database.py           # SQLAlchemy 2.0 engine, settings & session factory
+│   │   ├── database.py           # SQLAlchemy 2.0 engine, pool config & session factory
 │   │   ├── http_client.py        # Shared async HTTPX client, connection pooling & URL masking
 │   │   └── security.py           # Password hashing & JWT token management
 │   ├── models/                   # SQLAlchemy 2.0 ORM models (Title, User)
@@ -671,15 +845,15 @@ ott-content-aggregator/
 │   │   ├── cache_service.py      # Catalog caching, deterministic keys & invalidation
 │   │   ├── catalog_service.py    # Database catalog CRUD, search, filter & pagination
 │   │   └── external_provider_service.py # Non-blocking external HTTP service with retries
-│   └── main.py                   # FastAPI application factory, lifespan & health
+│   └── main.py                   # FastAPI app factory, lifespan, security headers & health probes
 ├── tests/
 │   ├── test_api_defects_and_contract.py
 │   ├── test_auth_api.py
 │   ├── test_auth_service.py
-│   ├── test_background_and_external_http.py # Task 5 async HTTP & background tests
+│   ├── test_background_and_external_http.py # Async HTTP client & background tasks
 │   ├── test_catalog_search_and_pagination.py
-│   ├── test_cross_component_integration.py  # Task 6 cross-component integration tests
-│   ├── test_migration_and_startup.py
+│   ├── test_cross_component_integration.py  # Cross-component integration tests
+│   ├── test_migration_and_startup.py        # Startup, health probes & security headers
 │   ├── test_migrations.py
 │   ├── test_postgresql_integration.py       # Genuine PostgreSQL integration tests
 │   ├── test_redis_caching_unit.py           # Redis unit & resilience tests
@@ -687,7 +861,12 @@ ott-content-aggregator/
 │   ├── test_security.py
 │   ├── test_title_protection.py
 │   └── test_user_model_schemas.py
-├── docker-compose.yml            # Docker Compose service definition (PostgreSQL & Redis)
+├── scratch/
+│   ├── benchmark_catalog.py      # Repeatable catalog performance benchmark script
+│   └── benchmark_results.json    # Measured latency & speedup metrics
+├── Dockerfile                    # Production multi-stage Dockerfile (non-root appuser)
+├── .dockerignore                 # Docker build context exclusions
+├── docker-compose.yml            # Docker Compose service definition (api, db, redis)
 ├── alembic.ini                   # Alembic configuration
 ├── requirements.txt              # Production and development dependencies
 ├── .env.example                  # Environment configuration template

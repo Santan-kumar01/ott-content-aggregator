@@ -117,7 +117,9 @@ async def list_titles_paginated(
     if filters:
         count_query = count_query.where(*filters)
 
-    total = await db.scalar(count_query)
+    total = await db.scalar(count_query) or 0
+    if total == 0 or skip >= total:
+        return [], total
 
     query = select(Title)
 
@@ -130,7 +132,7 @@ async def list_titles_paginated(
     result = await db.scalars(query)
     items = list(result.all())
 
-    return items, total or 0
+    return items, total
 
 
 async def get_title(

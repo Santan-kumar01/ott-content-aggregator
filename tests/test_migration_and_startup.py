@@ -94,3 +94,40 @@ def test_migration_lifecycle_isolated_db():
         assert "users" in set(inspector3.get_table_names())
         assert "titles" in set(inspector3.get_table_names())
         sync_engine3.dispose()
+
+
+@pytest.mark.anyio
+async def test_security_headers_middleware():
+    """Verify production security headers are set on HTTP responses."""
+    from httpx import ASGITransport, AsyncClient
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        res = await client.get("/")
+        assert res.status_code == 200
+        assert res.headers.get("X-Content-Type-Options") == "nosniff"
+        assert res.headers.get("X-Frame-Options") == "DENY"
+        assert res.headers.get("Referrer-Policy") == "strict-origin-when-cross-origin"
+
+
+@pytest.mark.anyio
+async def test_liveness_and_readiness_probes():
+    """Verify /health/live and /health/ready probe endpoints."""
+    from httpx import ASGITransport, AsyncClient
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        # Liveness probe returns 200 alive without database queries
+        live_res = await client.get("/health/live")
+        assert live_res.status_code == 200
+        assert live_res.json() == {"status": "alive"}
+
+        # Readiness probe reports database & redis status
+        ready_res = await client.get("/health/ready")
+        assert ready_res.status_code in (200, 503)
+        data = ready_res.json()
+        assert "status" in data
+        assert "database" in data
+        assert "redis" in data

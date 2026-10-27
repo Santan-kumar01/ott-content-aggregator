@@ -1,13 +1,12 @@
-
 from collections.abc import AsyncGenerator
 
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
 from sqlalchemy.orm import DeclarativeBase
-from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -22,6 +21,14 @@ class Settings(BaseSettings):
     external_api_max_retries: int = 2
     external_provider_base_url: str = "https://api.example-ott-provider.com"
 
+    # Production & performance settings
+    environment: str = "production"
+    allowed_origins: str = ""
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
+    db_pool_timeout: float = 30.0
+    db_pool_recycle: int = 1800
+
     model_config = SettingsConfigDict(
         env_file=".env",
         extra="ignore",
@@ -30,10 +37,24 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
+# Configure database engine with connection pooling for PostgreSQL while supporting SQLite for tests
+_engine_kwargs = {
+    "echo": False,
+    "pool_pre_ping": True,
+}
+if not settings.database_url.startswith("sqlite"):
+    _engine_kwargs.update(
+        {
+            "pool_size": settings.db_pool_size,
+            "max_overflow": settings.db_max_overflow,
+            "pool_timeout": settings.db_pool_timeout,
+            "pool_recycle": settings.db_pool_recycle,
+        }
+    )
+
 engine = create_async_engine(
     settings.database_url,
-    echo=False,
-    pool_pre_ping=True,
+    **_engine_kwargs,
 )
 
 SessionLocal = async_sessionmaker(

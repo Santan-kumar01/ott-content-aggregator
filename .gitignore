@@ -7,3 +7,8 @@ __pycache__/
 htmlcov/
 scratch/
 .vscode/
+*.sqlite*
+*.db
+build/
+dist/
+*.egg-info/
