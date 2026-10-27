@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 from jose import jwt
 import pytest
@@ -13,6 +14,10 @@ from src.core.cache import (
     get_redis_client,
     init_redis_client,
     is_invalidation_pending,
+    redis_delete,
+    redis_get,
+    redis_incr,
+    redis_set,
     set_invalidation_pending,
 )
 from src.core.database import Base, get_db, settings
@@ -513,3 +518,255 @@ async def test_lifespan_startup_and_shutdown_integration():
     # Verify resource cleanup post-lifespan
     await close_http_client()
     await close_redis_client()
+
+
+# ---------------------------------------------------------------------------
+# 7. CATALOG LITERAL WILDCARD SEARCH INTEGRATION
+# ---------------------------------------------------------------------------
+
+@pytest.mark.anyio
+async def test_catalog_literal_wildcard_search(
+    integration_client, auth_user_and_headers
+):
+    """Verify that % and _ characters in search queries are matched literally without wildcard expansion."""
+    client, _ = integration_client
+    _, headers, _ = auth_user_and_headers
+
+    items_to_create = [
+        {
+            "name": "Cotton 100% Pure",
+            "description": "Material quality 100%",
+            "content_type": "movie",
+            "release_year": 2021,
+            "genre": "Drama",
+            "platform": "Netflix",
+        },
+        {
+            "name": "Cotton 1000 Pure",
+            "description": "Material quantity 1000",
+            "content_type": "movie",
+            "release_year": 2021,
+            "genre": "Drama",
+            "platform": "Netflix",
+        },
+        {
+            "name": "Code_Name_Alpha",
+            "description": "Undercover mission",
+            "content_type": "movie",
+            "release_year": 2022,
+            "genre": "Action",
+            "platform": "Prime",
+        },
+        {
+            "name": "CodeXNameXAlpha",
+            "description": "Standard mission",
+            "content_type": "movie",
+            "release_year": 2022,
+            "genre": "Action",
+            "platform": "Prime",
+        },
+    ]
+    for item in items_to_create:
+        res = await client.post("/api/v1/titles", json=item, headers=headers)
+        assert res.status_code == 201
+
+    # 1. Search for literal '100%' should match 'Cotton 100% Pure' and NOT 'Cotton 1000 Pure'
+    res_percent = await client.get("/api/v1/titles?search=100%")
+    assert res_percent.status_code == 200
+    names_percent = [t["name"] for t in res_percent.json()]
+    assert "Cotton 100% Pure" in names_percent
+    assert "Cotton 1000 Pure" not in names_percent
+
+    # 2. Search for literal 'Code_Name_Alpha' should match 'Code_Name_Alpha' and NOT 'CodeXNameXAlpha'
+    res_underscore = await client.get("/api/v1/titles?search=Code_Name_Alpha")
+    assert res_underscore.status_code == 200
+    names_underscore = [t["name"] for t in res_underscore.json()]
+    assert "Code_Name_Alpha" in names_underscore
+    assert "CodeXNameXAlpha" not in names_underscore
+
+
+# ---------------------------------------------------------------------------
+# 8. REDIS CORRUPTED DATA & GENERATION RECOVERY
+# ---------------------------------------------------------------------------
+
+@pytest.mark.anyio
+async def test_redis_corrupted_payload_and_generation_recovery():
+    """Verify handling of invalid generation numbers and corrupted JSON payloads in Redis."""
+    # 1. Invalid non-integer generation string resets to default generation
+    with patch("src.services.cache_service.redis_get", new=AsyncMock(return_value="corrupted_gen_str")):
+        with patch("src.services.cache_service.redis_set", new=AsyncMock(return_value=True)):
+            gen = await cache_service.get_catalog_generation()
+            assert gen == 1
+
+    # 2. Corrupted JSON payload returns None and gracefully falls back to DB
+    with patch("src.services.cache_service.get_catalog_generation", new=AsyncMock(return_value=1)):
+        with patch("src.services.cache_service.redis_get", new=AsyncMock(return_value="INVALID_NOT_A_JSON{")):
+            res = await cache_service.get_catalog_list(genre="Action")
+            assert res is None
+
+    # 3. Test redis_delete with empty keys returns 0
+    del_count = await redis_delete()
+    assert del_count == 0
+
+
+# ---------------------------------------------------------------------------
+# 9. BACKGROUND TASK UNEXPECTED EXCEPTION & ROLLBACK
+# ---------------------------------------------------------------------------
+
+@pytest.mark.anyio
+async def test_background_sync_unexpected_exception_and_db_rollback(
+    integration_client, auth_user_and_headers
+):
+    """Verify unexpected non-provider runtime exceptions during sync trigger DB rollback and record error."""
+    client, session_factory = integration_client
+    _, headers, _ = auth_user_and_headers
+
+    create_res = await client.post(
+        "/api/v1/titles",
+        json={
+            "name": "Sync Crash Movie",
+            "description": "Safe before crash",
+            "content_type": "movie",
+            "release_year": 2020,
+            "genre": "Drama",
+            "platform": "Netflix",
+        },
+        headers=headers,
+    )
+    assert create_res.status_code == 201
+    title_id = create_res.json()["id"]
+
+    sync_res = await client.post(
+        f"/api/v1/titles/{title_id}/sync",
+        json={"external_id": "crash-test"},
+        headers=headers,
+    )
+    assert sync_res.status_code == 202
+    task_id = sync_res.json()["task_id"]
+
+    # Simulate unexpected generic Exception inside task
+    with patch("src.services.background_tasks.SessionLocal", session_factory):
+        with patch(
+            "src.services.background_tasks.fetch_external_title_metadata",
+            side_effect=RuntimeError("Unexpected unhandled system error"),
+        ):
+            await sync_title_from_external_provider_task(
+                task_id=task_id, title_id=title_id, external_id="crash-test"
+            )
+
+    status_res = await client.get(f"/api/v1/titles/sync/tasks/{task_id}")
+    assert status_res.status_code == 200
+    task_data = status_res.json()
+    assert task_data["status"] == "failed"
+    assert "Unexpected error during sync" in task_data["error"]
+    assert "Unexpected unhandled system error" in task_data["error"]
+
+    # Verify database state was preserved
+    get_res = await client.get(f"/api/v1/titles/{title_id}")
+    assert get_res.json()["description"] == "Safe before crash"
+
+
+# ---------------------------------------------------------------------------
+# 10. AUTH TOKEN SIGNATURE & EXPIRATION EDGE CASES
+# ---------------------------------------------------------------------------
+
+@pytest.mark.anyio
+async def test_auth_token_signature_and_expiration_edge_cases(integration_client):
+    """Verify expired token, forged signature, and invalid algorithm tokens return 401."""
+    client, _ = integration_client
+
+    # 1. Expired token
+    expired_token = jwt.encode(
+        {"sub": "1", "exp": int(datetime.now(timezone.utc).timestamp()) - 3600},
+        settings.jwt_secret_key,
+        algorithm=settings.jwt_algorithm,
+    )
+    res_exp = await client.get(
+        "/api/v1/auth/me", headers={"Authorization": f"Bearer {expired_token}"}
+    )
+    assert res_exp.status_code == 401
+
+    # 2. Forged secret token
+    forged_token = jwt.encode(
+        {"sub": "1", "exp": int(datetime.now(timezone.utc).timestamp()) + 3600},
+        "wrong_secret_key_123456789012345678901234567890",
+        algorithm=settings.jwt_algorithm,
+    )
+    res_forged = await client.get(
+        "/api/v1/auth/me", headers={"Authorization": f"Bearer {forged_token}"}
+    )
+    assert res_forged.status_code == 401
+
+    # 3. Unsecured none-algorithm token
+    none_token = "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiIxIiwiZXhwIjo5OTk5OTk5OTk5fQ."
+    res_none = await client.get(
+        "/api/v1/auth/me", headers={"Authorization": f"Bearer {none_token}"}
+    )
+    assert res_none.status_code == 401
+
+    # 4. Completely malformed token string
+    res_malformed = await client.get(
+        "/api/v1/auth/me", headers={"Authorization": "Bearer not.a.valid.jwt"}
+    )
+    assert res_malformed.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# 11. COMBINED QUERY PARAMETERS & DISTINCT CACHE KEYS
+# ---------------------------------------------------------------------------
+
+@pytest.mark.anyio
+async def test_combined_query_params_and_distinct_cache_keys(
+    integration_client, auth_user_and_headers
+):
+    """Verify multi-parameter queries (search+genre+platform+sort) generate distinct cache keys."""
+    client, _ = integration_client
+    _, headers, _ = auth_user_and_headers
+
+    titles = [
+        {
+            "name": "Alpha Space",
+            "content_type": "movie",
+            "release_year": 2020,
+            "genre": "Sci-Fi",
+            "platform": "Netflix",
+        },
+        {
+            "name": "Beta Space",
+            "content_type": "movie",
+            "release_year": 2020,
+            "genre": "Sci-Fi",
+            "platform": "Prime",
+        },
+        {
+            "name": "Gamma Earth",
+            "content_type": "movie",
+            "release_year": 2021,
+            "genre": "Drama",
+            "platform": "Netflix",
+        },
+    ]
+    for t in titles:
+        res = await client.post("/api/v1/titles", json=t, headers=headers)
+        assert res.status_code == 201
+
+    # Combined query 1: Sci-Fi on Netflix
+    res1 = await client.get("/api/v1/titles?search=Space&genre=Sci-Fi&platform=Netflix")
+    assert res1.status_code == 200
+    assert len(res1.json()) == 1
+    assert res1.json()[0]["name"] == "Alpha Space"
+
+    # Combined query 2: Sci-Fi on Prime
+    res2 = await client.get("/api/v1/titles?search=Space&genre=Sci-Fi&platform=Prime")
+    assert res2.status_code == 200
+    assert len(res2.json()) == 1
+    assert res2.json()[0]["name"] == "Beta Space"
+
+    # Verify hashes differ
+    hash1 = cache_service.build_catalog_params_hash(
+        search="Space", genre="Sci-Fi", platform="Netflix"
+    )
+    hash2 = cache_service.build_catalog_params_hash(
+        search="Space", genre="Sci-Fi", platform="Prime"
+    )
+    assert hash1 != hash2
