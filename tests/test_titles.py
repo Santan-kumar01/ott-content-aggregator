@@ -910,3 +910,23 @@ async def test_paginated_titles_offset_beyond_total_returns_empty_items(
     assert data["skip"] == 2
     assert data["limit"] == 1
     assert data["has_next"] is False
+
+@pytest.mark.anyio
+async def test_create_title_without_authentication_returns_401(
+    client: AsyncClient,
+):
+    payload = {
+        "name": "Unauthorized Movie",
+        "description": "Should not be created without authentication",
+        "content_type": "movie",
+        "release_year": 2024,
+        "genre": "Drama",
+        "platform": "Netflix",
+    }
+
+    response = await client.post(
+        "/api/v1/titles",
+        json=payload,
+    )
+
+    assert response.status_code == 401
