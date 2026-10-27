@@ -930,3 +930,25 @@ async def test_create_title_without_authentication_returns_401(
     )
 
     assert response.status_code == 401
+
+@pytest.mark.anyio
+async def test_create_title_with_invalid_bearer_token_returns_401(
+    client: AsyncClient,
+):
+    payload = {
+        "name": "Invalid Token Movie",
+        "description": "Should not be created with an invalid token",
+        "content_type": "movie",
+        "release_year": 2024,
+        "genre": "Drama",
+        "platform": "Netflix",
+    }
+    headers = {"Authorization": "Bearer invalid.token.value"}
+
+    response = await client.post(
+        "/api/v1/titles",
+        json=payload,
+        headers=headers,
+    )
+
+    assert response.status_code == 401
