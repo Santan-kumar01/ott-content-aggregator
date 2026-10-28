@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     db_pool_timeout: float = 30.0
     db_pool_recycle: int = 1800
 
+    # Groq Speech-to-Text settings
+    groq_api_key: str | None = None
+    groq_transcription_model: str = "whisper-large-v3-turbo"
+    groq_timeout_seconds: float = 30.0
+
     model_config = SettingsConfigDict(
         env_file=".env",
         extra="ignore",
