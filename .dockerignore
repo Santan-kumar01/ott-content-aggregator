@@ -1,3 +1,4 @@
+
 # Version control
 .git/
 .gitignore
@@ -35,6 +36,9 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
-# Build artifacts & CI files
+# Temporary files
+scratch/
+
+# Build artifacts and local Compose configuration
 .github/
 docker-compose*.yml
