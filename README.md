@@ -818,10 +818,49 @@ python -m pytest --cov=src --cov-report=html
 
 ---
 
+## Continuous Integration (CI/CD)
+
+The repository includes an enterprise-grade automated CI pipeline managed via GitHub Actions:
+
+### 1. Workflow Configuration (`.github/workflows/ci.yml`)
+
+- **Triggers**:
+  - Pushes to `feat/authentication`.
+  - Pull requests targeting `feat/authentication`.
+  - Manual triggers via `workflow_dispatch`.
+- **Security Posture**:
+  - Strict minimal permissions: `permissions: contents: read`.
+  - No secret tokens, credentials, or private URLs printed or committed.
+  - No automatic container image publishing or cloud infrastructure deployment.
+
+### 2. CI Pipeline Jobs
+
+1. **`test` (Automated Test Suite & Code Coverage)**:
+   - **Environment**: Ubuntu Linux with Python 3.11.
+   - **Service Containers**:
+     - **PostgreSQL 16 Alpine** (`ott_test_db`, port 5432) with automated healthcheck (`pg_isready`).
+     - **Redis 7 Alpine** (port 6379) with automated healthcheck (`redis-cli ping`).
+   - **Execution**:
+     - Installs dependencies from pinned `requirements.txt` with pip caching.
+     - Runs the complete automated test suite across all 14 test modules (162 tests).
+     - Generates line-by-line code coverage (`--cov=src --cov-report=term-missing --cov-report=xml`).
+     - Fails build with a non-zero exit code if any test or assertion fails.
+
+2. **`docker-build` (Container Build & Runtime Sanity)**:
+   - Sets up Docker Buildx.
+   - Builds the production multi-stage `Dockerfile`.
+   - Verifies that the container process runs under unprivileged user `appuser` (UID `10001`).
+   - Executes container application sanity import to verify dependency integrity.
+
+---
+
 ## Project Structure
 
 ```text
 ott-content-aggregator/
+├── .github/
+│   └── workflows/
+│       └── ci.yml                # GitHub Actions automated test & Docker CI pipeline
 ├── alembic/                      # Alembic database migrations
 │   ├── versions/                 # Version-controlled migration scripts (0001, 0002, 497ce7b6dfad)
 │   └── env.py                    # Async migration runner environment

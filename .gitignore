@@ -12,3 +12,5 @@ scratch/
 build/
 dist/
 *.egg-info/
+coverage.xml
+*.xml

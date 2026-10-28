@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - feat/authentication
+  pull_request:
+    branches:
+      - feat/authentication
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test & Coverage
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ott_test_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run automated test suite with coverage
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/ott_test_db
+          POSTGRES_TEST_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/ott_test_db
+          REDIS_URL: redis://localhost:6379/0
+          JWT_SECRET_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          JWT_ALGORITHM: HS256
+          ACCESS_TOKEN_EXPIRE_MINUTES: 30
+          CACHE_ENABLED: "true"
+          CACHE_TTL_SECONDS: 300
+          ENVIRONMENT: testing
+          ALLOW_DESTRUCTIVE_DOWNGRADE: "1"
+        run: |
+          python -m pytest --cov=src --cov-report=term-missing --cov-report=xml -v
+
+  docker-build:
+    name: Docker Build & Sanity
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        run: |
+          docker build -t ott-content-aggregator:ci .
+
+      - name: Verify non-root container user
+        run: |
+          USER=$(docker run --rm ott-content-aggregator:ci whoami)
+          echo "Container running as user: $USER"
+          test "$USER" = "appuser"
+
+      - name: Verify application container sanity
+        run: |
+          docker run --rm \
+            -e DATABASE_URL="postgresql+asyncpg://postgres:postgres@localhost:5432/ott_db" \
+            -e JWT_SECRET_KEY="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" \
+            ott-content-aggregator:ci \
+            python -c "import src.main; print('Container application import verified successfully')"
