@@ -1,7 +1,8 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from jose import jwt
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import (
@@ -10,7 +11,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from src.core.database import Base, get_db
+from src.core.database import Base, get_db, settings
 from src.main import app
 from src.models.title import Title
 
@@ -952,3 +953,36 @@ async def test_create_title_with_invalid_bearer_token_returns_401(
     )
 
     assert response.status_code == 401
+
+@pytest.mark.anyio
+async def test_create_title_with_expired_token_returns_401(
+    client: AsyncClient,
+):
+    now = datetime.now(timezone.utc)
+    expired_token = jwt.encode(
+        {
+            "sub": "expired_user",
+            "iat": int((now - timedelta(hours=2)).timestamp()),
+            "exp": int((now - timedelta(hours=1)).timestamp()),
+        },
+        settings.jwt_secret_key,
+        algorithm=settings.jwt_algorithm,
+    )
+
+    payload = {
+        "name": "Expired Token Movie",
+        "description": "Should not be created with an expired token",
+        "content_type": "movie",
+        "release_year": 2024,
+        "genre": "Drama",
+        "platform": "Netflix",
+    }
+
+    response = await client.post(
+        "/api/v1/titles",
+        json=payload,
+        headers={"Authorization": f"Bearer {expired_token}"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Token has expired"
