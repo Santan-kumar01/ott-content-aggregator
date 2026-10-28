@@ -238,8 +238,11 @@ def test_incompatible_users_non_unique_email_index(tmp_path: Path):
     assert "Migration 0002 aborted: Index 'ix_users_email' exists on table 'users' but is not UNIQUE." in str(exc_info.value)
 
 
-def test_downgrade_preserves_data_and_blocks_accidental_drop(tmp_path: Path):
+def test_downgrade_preserves_data_and_blocks_accidental_drop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Verify that downgrade refuses to drop tables when rows are present to protect data."""
+    # Ensure environment does not bypass downgrade protection during this test
+    monkeypatch.delenv("ALLOW_DESTRUCTIVE_DOWNGRADE", raising=False)
+
     db_file = tmp_path / "downgrade_protect.db"
     sync_url = f"sqlite:///{db_file.as_posix()}"
     cfg = get_test_alembic_config(db_file)

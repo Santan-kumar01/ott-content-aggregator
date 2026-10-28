@@ -1,5 +1,9 @@
+import asyncio
+import concurrent.futures
 import os
 import pytest
+from alembic import command
+from alembic.config import Config
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -11,6 +15,26 @@ POSTGRES_TEST_URL = os.getenv(
     "POSTGRES_TEST_URL",
     "postgresql+asyncpg://postgres:postgres@localhost:5432/ott_test_db",
 )
+
+
+@pytest.fixture(scope="module", autouse=True)
+def ensure_postgres_schema_migrated():
+    """Ensure target PostgreSQL test database has Alembic migrations applied before tests run."""
+    def _run_upgrade():
+        alembic_cfg = Config("alembic.ini")
+        alembic_cfg.set_main_option("sqlalchemy.url", POSTGRES_TEST_URL)
+        command.upgrade(alembic_cfg, "head")
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            pool.submit(_run_upgrade).result()
+    else:
+        _run_upgrade()
 
 
 @pytest.fixture(scope="module")
@@ -286,12 +310,20 @@ async def test_postgres_alembic_head_and_schema_parity(pg_engine):
         assert {"id", "name", "description", "content_type", "release_year", "genre", "platform", "created_at"}.issubset(t_cols)
 
         # 5. Verify transaction rollback works under unique constraint violation
-        await conn.rollback()
+        await conn.execute(
+            text(
+                "INSERT INTO users (email, username, hashed_password) "
+                "VALUES ('pg_dupe_check@example.com', 'dupe_base', 'hash123') "
+                "ON CONFLICT (email) DO NOTHING"
+            )
+        )
+        await conn.commit()
+
         trans = await conn.begin()
         try:
             # Attempt duplicate insert violating unique email
             await conn.execute(
-                text("INSERT INTO users (email, username, hashed_password) VALUES ('pg_tester@example.com', 'dupe_test', 'hash123')")
+                text("INSERT INTO users (email, username, hashed_password) VALUES ('pg_dupe_check@example.com', 'dupe_test', 'hash123')")
             )
         except Exception:
             await trans.rollback()

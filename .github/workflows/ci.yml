@@ -55,6 +55,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Apply database migrations to test database
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/ott_test_db
+        run: |
+          alembic upgrade head
+
       - name: Run automated test suite with coverage
         env:
           DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/ott_test_db
@@ -66,7 +72,6 @@ jobs:
           CACHE_ENABLED: "true"
           CACHE_TTL_SECONDS: 300
           ENVIRONMENT: testing
-          ALLOW_DESTRUCTIVE_DOWNGRADE: "1"
         run: |
           python -m pytest --cov=src --cov-report=term-missing --cov-report=xml -v
 
