@@ -5,3 +5,12 @@ __pycache__/
 .pytest_cache/
 .coverage
 htmlcov/
+scratch/
+.vscode/
+*.sqlite*
+*.db
+build/
+dist/
+*.egg-info/
+coverage.xml
+*.xml

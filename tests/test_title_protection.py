@@ -110,12 +110,12 @@ async def test_update_title_unauthenticated_rejected(client: AsyncClient):
     update_payload = {"name": "Updated Title Name"}
 
     # No Authorization header
-    res_no_auth = await client.put("/api/v1/titles/1", json=update_payload)
+    res_no_auth = await client.patch("/api/v1/titles/1", json=update_payload)
     assert res_no_auth.status_code == 401
     assert res_no_auth.json()["detail"] == "Authentication token is missing"
 
     # Invalid Authorization header
-    res_bad_auth = await client.put(
+    res_bad_auth = await client.patch(
         "/api/v1/titles/1",
         json=update_payload,
         headers={"Authorization": "Bearer invalid.token.signature"},
@@ -179,7 +179,7 @@ async def test_authenticated_title_crud_lifecycle(
         "name": "Interstellar (Updated Edition)",
         "genre": "Adventure",
     }
-    update_res = await client.put(
+    update_res = await client.patch(
         f"/api/v1/titles/{title_id}",
         json=update_payload,
         headers=auth_headers,

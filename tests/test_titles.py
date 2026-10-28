@@ -79,7 +79,10 @@ async def test_health_endpoint(client: AsyncClient):
     response = await client.get("/health")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "healthy"}
+    data = response.json()
+    assert data["status"] == "healthy"
+    assert data["database"] in {"connected", "disconnected"}
+    assert data["redis"] in {"connected", "disconnected"}
 
 
 @pytest.mark.anyio
@@ -736,7 +739,7 @@ def test_catalog_error_responses_use_error_response_schema():
     expected_responses = {
         ("/api/v1/titles", "post"): ["401", "422"],
         ("/api/v1/titles/{title_id}", "get"): ["404"],
-        ("/api/v1/titles/{title_id}", "put"): ["401", "404", "422"],
+        ("/api/v1/titles/{title_id}", "patch"): ["401", "404", "422"],
         ("/api/v1/titles/{title_id}", "delete"): ["401", "404"],
     }
 
@@ -762,10 +765,10 @@ def test_catalog_error_responses_use_error_response_schema():
         ("post", "genre", ""),
         ("post", "platform", "P" * 101),
         ("post", "release_year", 2101),
-        ("put", "name", ""),
-        ("put", "description", "D" * 2001),
-        ("put", "genre", ""),
-        ("put", "platform", "P" * 101),
+        ("patch", "name", ""),
+        ("patch", "description", "D" * 2001),
+        ("patch", "genre", ""),
+        ("patch", "platform", "P" * 101),
     ],
 )
 async def test_title_endpoints_reject_invalid_field_boundaries(
@@ -793,7 +796,7 @@ async def test_title_endpoints_reject_invalid_field_boundaries(
             headers=auth_headers,
         )
     else:
-        response = await client.put(
+        response = await client.patch(
             "/api/v1/titles/1",
             json=payload,
             headers=auth_headers,
@@ -877,7 +880,10 @@ async def test_health_endpoint_stays_healthy_when_database_fails(
     response = await client.get("/health")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "healthy"}
+    data = response.json()
+    assert data["status"] == "healthy"
+    assert data["database"] in {"connected", "disconnected"}
+    assert data["redis"] in {"connected", "disconnected"}
 
 @pytest.mark.anyio
 async def test_paginated_titles_offset_beyond_total_returns_empty_items(

@@ -65,7 +65,11 @@ async def create_title(
 ) -> Title:
     title = Title(**data.model_dump())
     db.add(title)
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
     await db.refresh(title)
     return title
 
@@ -111,14 +115,14 @@ async def list_titles_paginated(
     )
 
     count_query = select(func.count()).select_from(Title)
-
     if filters:
         count_query = count_query.where(*filters)
 
-    total = await db.scalar(count_query)
+    total = await db.scalar(count_query) or 0
+    if total == 0 or skip >= total:
+        return [], total
 
     query = select(Title)
-
     if filters:
         query = query.where(*filters)
 
@@ -128,7 +132,7 @@ async def list_titles_paginated(
     result = await db.scalars(query)
     items = list(result.all())
 
-    return items, total or 0
+    return items, total
 
 
 async def get_title(
@@ -148,7 +152,11 @@ async def update_title(
     ).items():
         setattr(title, field, value)
 
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
     await db.refresh(title)
     return title
 
@@ -158,4 +166,8 @@ async def delete_title(
     title: Title,
 ) -> None:
     await db.delete(title)
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
