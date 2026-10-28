@@ -16,6 +16,17 @@ jobs:
   test:
     name: Test & Coverage
     runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/ott_test_db
+      POSTGRES_TEST_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/ott_test_db
+      REDIS_URL: redis://localhost:6379/0
+      # Dedicated non-production test secret for automated CI verification only
+      JWT_SECRET_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      JWT_ALGORITHM: HS256
+      ACCESS_TOKEN_EXPIRE_MINUTES: 30
+      CACHE_ENABLED: "true"
+      CACHE_TTL_SECONDS: 300
+      ENVIRONMENT: testing
     services:
       postgres:
         image: postgres:16-alpine
@@ -58,20 +69,11 @@ jobs:
       - name: Apply database migrations to test database
         env:
           DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/ott_test_db
+          JWT_SECRET_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
         run: |
           alembic upgrade head
 
       - name: Run automated test suite with coverage
-        env:
-          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/ott_test_db
-          POSTGRES_TEST_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/ott_test_db
-          REDIS_URL: redis://localhost:6379/0
-          JWT_SECRET_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-          JWT_ALGORITHM: HS256
-          ACCESS_TOKEN_EXPIRE_MINUTES: 30
-          CACHE_ENABLED: "true"
-          CACHE_TTL_SECONDS: 300
-          ENVIRONMENT: testing
         run: |
           python -m pytest --cov=src --cov-report=term-missing --cov-report=xml -v
 
