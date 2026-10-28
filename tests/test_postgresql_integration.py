@@ -6,6 +6,7 @@ from alembic import command
 from alembic.config import Config
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from src.core.database import get_db
@@ -118,7 +119,13 @@ async def test_postgres_connection_verification(pg_engine):
         res = await conn.execute(text("SELECT current_database(), version()"))
         row = res.fetchone()
         db_name, version = row[0], row[1]
-        assert db_name == "ott_test_db"
+        expected_db_name = make_url(
+            os.environ.get(
+                "POSTGRES_TEST_URL",
+                "postgresql+asyncpg://postgres:postgres@localhost:5433/ott_test_db",
+            )
+        ).database
+        assert db_name == expected_db_name
         assert "PostgreSQL 16" in version
 
 
