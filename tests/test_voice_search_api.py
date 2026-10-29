@@ -14,10 +14,12 @@ Covers:
 11. Backward compatibility of POST /api/v1/voice/transcribe.
 """
 
+import asyncio
 import struct
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -618,3 +620,185 @@ async def test_openapi_schema_contains_both_voice_endpoints(client_and_db):
     assert "post" in paths["/api/v1/voice/transcribe"]
     assert "/api/v1/voice/search" in paths
     assert "post" in paths["/api/v1/voice/search"]
+
+
+# ===========================================================================
+# 13. Hardening & Fault Tolerance Scenarios (Task 6)
+# ===========================================================================
+
+
+@pytest.mark.anyio
+async def test_voice_search_succeeds_even_when_cache_service_fails(
+    client_and_db, mock_transcription_service, caplog
+):
+    """Verify search succeeds via database even if cache lookup or write throws an unhandled exception.
+
+    Verifies:
+    1. Cache-read failure falls back to PostgreSQL.
+    2. Cache-write failure does not turn successful database results into HTTP 500.
+    3. Successful database results are returned even when caching fails.
+    4. Database query is executed exactly once (cache-write failure does not repeat query).
+    5. Cache failures do not leak internal details to the client.
+    6. Appropriate warning logs record the failure class name without sensitive credentials or transcripts.
+    """
+    import logging
+    from src.services import catalog_service
+
+    client, _ = client_and_db
+    mock_transcription_service.transcribe.return_value = "Show me Inception"
+
+    wav_bytes = make_valid_wav_bytes(200)
+    files = {"file": ("query.wav", wav_bytes, "audio/wav")}
+
+    real_list_titles = catalog_service.list_titles
+    with patch(
+        "src.services.cache_service.get_catalog_list",
+        side_effect=ConnectionRefusedError("Redis connection refused to redis://:supersecret@127.0.0.1:6379/0"),
+    ), patch(
+        "src.services.cache_service.set_catalog_list",
+        side_effect=TimeoutError("Redis write timed out after 2.0s"),
+    ), patch(
+        "src.services.catalog_service.list_titles",
+        side_effect=real_list_titles,
+    ) as spy_list_titles, caplog.at_level(logging.WARNING):
+        response = await client.post("/api/v1/voice/search", files=files)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["count"] == 1
+    assert data["titles"][0]["name"] == "Inception"
+
+    # Verify database query was called exactly once and not repeated
+    assert spy_list_titles.call_count == 1
+
+    # Verify no cache error details leaked to client
+    assert "redis" not in response.text.lower()
+    assert "supersecret" not in response.text.lower()
+
+    # Verify warning logs recorded the exception class names without sensitive credentials
+    assert "Cache lookup failed during voice search: ConnectionRefusedError" in caplog.text
+    assert "Failed to populate catalog cache in voice search: TimeoutError" in caplog.text
+    assert "supersecret" not in caplog.text
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("param", "val"),
+    [
+        ("skip", -1),
+        ("limit", 0),
+        ("limit", 101),
+    ],
+)
+async def test_voice_search_invalid_pagination_parameters_rejected(
+    client_and_db, param, val
+):
+    """Verify invalid pagination boundaries (skip < 0, limit < 1, limit > 100) return 422."""
+    client, _ = client_and_db
+    wav_bytes = make_valid_wav_bytes(200)
+    files = {"file": ("query.wav", wav_bytes, "audio/wav")}
+
+    response = await client.post(f"/api/v1/voice/search?{param}={val}", files=files)
+    assert response.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_voice_search_unexpected_transcription_exception_mapped_to_502(
+    client_and_db, mock_transcription_service
+):
+    """Verify unhandled transcription exceptions are safely mapped to 502 without leaking stack traces."""
+    client, _ = client_and_db
+    mock_transcription_service.transcribe.side_effect = RuntimeError("Low-level network socket crashed")
+
+    wav_bytes = make_valid_wav_bytes(200)
+    files = {"file": ("query.wav", wav_bytes, "audio/wav")}
+
+    response = await client.post("/api/v1/voice/search", files=files)
+    assert response.status_code == 502
+    assert "error occurred while communicating with the transcription provider" in response.json()["detail"].lower()
+
+
+@pytest.mark.anyio
+async def test_oversized_audio_upload_rejected_on_search(client_and_db):
+    """Verify files exceeding 10 MB limit are rejected with HTTP 413 on /search."""
+    client, _ = client_and_db
+    # Create valid WAV header with 11 MB payload
+    eleven_mb = 11 * 1024 * 1024
+    header = struct.pack(
+        "<4sI4s4sIHHIIHH4sI",
+        b"RIFF",
+        36 + eleven_mb,
+        b"WAVE",
+        b"fmt ",
+        16,
+        1,
+        1,
+        16000,
+        32000,
+        2,
+        16,
+        b"data",
+        eleven_mb,
+    )
+    oversized_data = header + b"\x00" * eleven_mb
+    files = {"file": ("oversized.wav", oversized_data, "audio/wav")}
+
+    response = await client.post("/api/v1/voice/search", files=files)
+    assert response.status_code == 413
+    assert "exceeds the maximum allowed size" in response.json()["detail"].lower()
+
+
+def test_transcription_exception_handler_control_flow_preservation():
+    """Ensure control-flow exceptions (CancelledError, KeyboardInterrupt, HTTPException) are re-raised without swallowing."""
+    from src.api.endpoints.voice import _handle_transcription_exception
+
+    with pytest.raises(asyncio.CancelledError):
+        _handle_transcription_exception(asyncio.CancelledError("task cancelled"))
+
+    with pytest.raises(KeyboardInterrupt):
+        _handle_transcription_exception(KeyboardInterrupt())
+
+    with pytest.raises(SystemExit):
+        _handle_transcription_exception(SystemExit(1))
+
+    custom_http_err = HTTPException(status_code=403, detail="Forbidden")
+    with pytest.raises(HTTPException) as exc_info:
+        _handle_transcription_exception(custom_http_err)
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "Forbidden"
+
+
+@pytest.mark.anyio
+async def test_voice_search_cancellation_error_not_swallowed(
+    client_and_db, mock_transcription_service
+):
+    """Verify asyncio.CancelledError propagates out of the endpoint rather than returning an HTTP 502."""
+    client, _ = client_and_db
+    mock_transcription_service.transcribe.side_effect = asyncio.CancelledError("Task cancelled by client")
+
+    wav_bytes = make_valid_wav_bytes(200)
+    files = {"file": ("query.wav", wav_bytes, "audio/wav")}
+
+    # In Starlette middleware, an unswallowed BaseException causes the request task to cancel
+    # rather than completing with an HTTP 502 error response.
+    with pytest.raises((asyncio.CancelledError, RuntimeError)):
+        await client.post("/api/v1/voice/search", files=files)
+
+
+@pytest.mark.anyio
+async def test_voice_search_http_exception_during_transcription_preserved(
+    client_and_db, mock_transcription_service
+):
+    """Verify that an explicit HTTPException is preserved and not converted to a generic 502."""
+    client, _ = client_and_db
+    mock_transcription_service.transcribe.side_effect = HTTPException(
+        status_code=403,
+        detail="Audio transcription access forbidden for this account.",
+    )
+
+    wav_bytes = make_valid_wav_bytes(200)
+    files = {"file": ("query.wav", wav_bytes, "audio/wav")}
+
+    response = await client.post("/api/v1/voice/search", files=files)
+    assert response.status_code == 403
+    assert "Audio transcription access forbidden" in response.json()["detail"]

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import Annotated
 
@@ -122,8 +123,12 @@ async def _read_and_validate_audio_file(file: UploadFile) -> tuple[bytes, str]:
     return audio_bytes, file.filename
 
 
-def _handle_transcription_exception(exc: Exception) -> None:
+def _handle_transcription_exception(exc: BaseException) -> None:
     """Map transcription exceptions to standard, secure HTTP responses without leaking credentials."""
+    # Never swallow control-flow, cancellation, or existing HTTP exceptions
+    if isinstance(exc, (HTTPException, asyncio.CancelledError, KeyboardInterrupt, SystemExit)):
+        raise exc
+
     if isinstance(exc, TranscriptionConfigurationError):
         logger.error("Voice transcription failed: missing server-side configuration.")
         raise HTTPException(
@@ -172,7 +177,12 @@ def _handle_transcription_exception(exc: Exception) -> None:
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="An error occurred while communicating with the transcription provider.",
         ) from None
-    raise exc
+    else:
+        logger.error("Unexpected error during voice transcription: %s", type(exc).__name__)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="An error occurred while communicating with the transcription provider.",
+        ) from None
 
 
 @router.post(
@@ -265,6 +275,7 @@ async def voice_search_endpoint(
     filters = parsed.to_catalog_filters()
 
     # Query catalog using existing catalog service with caching
+    cached = None
     try:
         cached = await cache_service.get_catalog_list(
             genre=filters.get("genre"),
@@ -274,9 +285,14 @@ async def voice_search_endpoint(
             skip=skip,
             limit=limit,
         )
-        if cached is not None:
-            title_reads = [TitleRead.model_validate(c) for c in cached]
-        else:
+    except Exception as cache_err:
+        logger.warning("Cache lookup failed during voice search: %s", type(cache_err).__name__)
+        cached = None
+
+    if cached is not None:
+        title_reads = [TitleRead.model_validate(c) for c in cached]
+    else:
+        try:
             db_titles = await catalog_service.list_titles(
                 db=db,
                 genre=filters.get("genre"),
@@ -287,6 +303,14 @@ async def voice_search_endpoint(
                 limit=limit,
             )
             title_reads = [TitleRead.model_validate(t) for t in db_titles]
+        except Exception as db_exc:
+            logger.error("Catalog search failed during voice search: %s", type(db_exc).__name__)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="An error occurred while querying the catalog.",
+            ) from None
+
+        try:
             serialized = [t.model_dump(mode="json") for t in title_reads]
             await cache_service.set_catalog_list(
                 data=serialized,
@@ -297,12 +321,8 @@ async def voice_search_endpoint(
                 skip=skip,
                 limit=limit,
             )
-    except Exception as db_exc:
-        logger.error("Catalog search failed during voice search: %s", type(db_exc).__name__)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An error occurred while querying the catalog.",
-        ) from None
+        except Exception as cache_write_err:
+            logger.warning("Failed to populate catalog cache in voice search: %s", type(cache_write_err).__name__)
 
     # Apply content_type filtering if explicitly specified in voice query (e.g. "movies" or "shows")
     if parsed.content_type:
