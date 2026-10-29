@@ -1,3 +1,5 @@
+from unittest.mock import AsyncMock, patch
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -48,10 +50,14 @@ async def auth_headers(client: AsyncClient) -> dict[str, str]:
     )
     assert reg_res.status_code == 201
 
-    login_res = await client.post(
-        "/api/v1/auth/login",
-        data={"username": "creator@example.com", "password": "StrongPassword123!"},
-    )
+    with patch(
+        "src.api.endpoints.auth.redis_incr_with_expiry",
+        new=AsyncMock(return_value=1),
+    ):
+        login_res = await client.post(
+            "/api/v1/auth/login",
+            data={"username": "creator@example.com", "password": "StrongPassword123!"},
+        )
     assert login_res.status_code == 200
     token = login_res.json()["access_token"]
     return {"Authorization": f"Bearer {token}"}

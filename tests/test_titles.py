@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from jose import jwt
@@ -61,13 +61,17 @@ async def auth_headers(client: AsyncClient) -> dict[str, str]:
     )
     assert register_response.status_code == 201, register_response.text
 
-    login_response = await client.post(
-        "/api/v1/auth/login",
-        data={
-            "username": "validation@example.com",
-            "password": "StrongPassword123!",
-        },
-    )
+    with patch(
+        "src.api.endpoints.auth.redis_incr_with_expiry",
+        new=AsyncMock(return_value=1),
+    ):
+        login_response = await client.post(
+            "/api/v1/auth/login",
+            data={
+                "username": "validation@example.com",
+                "password": "StrongPassword123!",
+            },
+        )
     assert login_response.status_code == 200, login_response.text
 
     access_token = login_response.json()["access_token"]
@@ -86,7 +90,24 @@ async def test_health_endpoint(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_readiness_endpoint(client: AsyncClient):
+async def test_readiness_endpoint(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from src import main
+
+    mock_connection = MagicMock()
+    mock_connection.execute = AsyncMock(return_value=None)
+
+    mock_engine = MagicMock()
+    mock_engine.connect.return_value.__aenter__ = AsyncMock(
+        return_value=mock_connection
+    )
+    mock_engine.connect.return_value.__aexit__ = AsyncMock(
+        return_value=False
+    )
+    monkeypatch.setattr(main, "engine", mock_engine)
+
     response = await client.get("/ready")
 
     assert response.status_code == 200

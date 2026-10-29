@@ -16,6 +16,7 @@ from src.core.cache import (
     redis_delete,
     redis_get,
     redis_incr,
+    redis_incr_with_expiry,
     redis_set,
     sanitize_redis_url,
     set_invalidation_pending,
@@ -294,10 +295,14 @@ async def unit_auth_headers(unit_client: AsyncClient) -> dict[str, str]:
     )
     assert reg.status_code == 201
 
-    login = await unit_client.post(
-        "/api/v1/auth/login",
-        data={"username": "cacheunit", "password": "StrongPassword123!"},
-    )
+    with patch(
+        "src.api.endpoints.auth.redis_incr_with_expiry",
+        new=AsyncMock(return_value=1),
+    ):
+        login = await unit_client.post(
+            "/api/v1/auth/login",
+            data={"username": "cacheunit", "password": "StrongPassword123!"},
+        )
     assert login.status_code == 200
     token = login.json()["access_token"]
     return {"Authorization": f"Bearer {token}"}
@@ -395,3 +400,52 @@ async def test_failed_db_write_does_not_call_invalidation(
         )
         assert bad_res.status_code == 422
         mock_inval.assert_not_called()
+
+@pytest.mark.anyio
+async def test_redis_incr_with_expiry_success():
+    """Atomically increments the counter with the requested TTL."""
+    with patch("src.core.cache.get_redis_client") as mock_factory:
+        mock_client = AsyncMock()
+        mock_client.eval.return_value = 3
+        mock_factory.return_value = mock_client
+
+        result = await redis_incr_with_expiry("auth:rate:test", 60)
+
+        assert result == 3
+        mock_client.eval.assert_awaited_once()
+        args = mock_client.eval.await_args.args
+        assert "INCR" in args[0]
+        assert "EXPIRE" in args[0]
+        assert args[1:] == (1, "auth:rate:test", 60)
+
+
+@pytest.mark.anyio
+async def test_redis_incr_with_expiry_handles_redis_failure():
+    """Returns None if Redis cannot execute the counter script."""
+    with patch("src.core.cache.get_redis_client") as mock_factory:
+        mock_client = AsyncMock()
+        mock_client.eval.side_effect = RedisConnectionError("Connection refused")
+        mock_factory.return_value = mock_client
+
+        result = await redis_incr_with_expiry("auth:rate:test", 60)
+
+        assert result is None
+
+
+@pytest.mark.anyio
+async def test_redis_incr_with_expiry_returns_none_without_client():
+    """Returns None when Redis is disabled or no client is available."""
+    with patch("src.core.cache.get_redis_client", return_value=None):
+        result = await redis_incr_with_expiry("auth:rate:test", 60)
+
+        assert result is None
+
+
+@pytest.mark.anyio
+async def test_redis_incr_with_expiry_rejects_invalid_ttl():
+    """Rejects zero or negative expiration windows."""
+    with pytest.raises(ValueError, match="ttl_seconds must be greater than zero"):
+        await redis_incr_with_expiry("auth:rate:test", 0)
+
+    with pytest.raises(ValueError, match="ttl_seconds must be greater than zero"):
+        await redis_incr_with_expiry("auth:rate:test", -1)

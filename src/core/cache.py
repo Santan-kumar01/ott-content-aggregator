@@ -265,3 +265,37 @@ async def redis_incr(key: str) -> int | None:
             _redis_client = None
             _client_loop = None
         return None
+
+async def redis_incr_with_expiry(key: str, ttl_seconds: int) -> int | None:
+    """Atomically increment a Redis counter and set its initial expiry."""
+    global _redis_client, _client_loop
+
+    if ttl_seconds <= 0:
+        raise ValueError("ttl_seconds must be greater than zero")
+
+    client = get_redis_client()
+    if client is None:
+        return None
+
+    script = """
+    local count = redis.call('INCR', KEYS[1])
+    if count == 1 then
+        redis.call('EXPIRE', KEYS[1], ARGV[1])
+    end
+    return count
+    """
+
+    try:
+        return int(await client.eval(script, 1, key, ttl_seconds))
+    except (
+        RedisError,
+        asyncio.TimeoutError,
+        ConnectionError,
+        OSError,
+        RuntimeError,
+    ) as exc:
+        logger.warning("Redis rate-limit counter failed: %s", exc)
+        if isinstance(exc, RuntimeError):
+            _redis_client = None
+            _client_loop = None
+        return None

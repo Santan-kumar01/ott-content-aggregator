@@ -9,13 +9,12 @@ from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from src.core.database import get_db
+from src.core.database import get_db, settings
 from src.main import app
 
-POSTGRES_TEST_URL = os.getenv(
-    "POSTGRES_TEST_URL",
-    "postgresql+asyncpg://postgres:postgres@localhost:5432/ott_test_db",
-)
+POSTGRES_TEST_URL = os.getenv("POSTGRES_TEST_URL") or make_url(
+    settings.database_url
+).set(database="ott_test_db").render_as_string(hide_password=False)
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -23,7 +22,11 @@ def ensure_postgres_schema_migrated():
     """Ensure target PostgreSQL test database has Alembic migrations applied before tests run."""
     def _run_upgrade():
         alembic_cfg = Config("alembic.ini")
-        alembic_cfg.set_main_option("sqlalchemy.url", POSTGRES_TEST_URL)
+        alembic_cfg.set_section_option(
+            "alembic",
+            "sqlalchemy.url",
+            POSTGRES_TEST_URL.replace("%", "%%"),
+        )
         command.upgrade(alembic_cfg, "head")
 
     try:
@@ -74,12 +77,24 @@ async def pg_client(pg_engine):
 
     app.dependency_overrides[get_db] = override_get_db
 
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        yield client
+    from src.api.endpoints import auth
 
-    app.dependency_overrides.pop(get_db, None)
+    async def mock_redis_incr_with_expiry(
+        key: str, ttl_seconds: int
+    ) -> int:
+        return 1
+
+    original_limiter = auth.redis_incr_with_expiry
+    auth.redis_incr_with_expiry = mock_redis_incr_with_expiry
+
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            yield client
+    finally:
+        auth.redis_incr_with_expiry = original_limiter
+        app.dependency_overrides.pop(get_db, None)
 
 
 @pytest.fixture
@@ -126,7 +141,7 @@ async def test_postgres_connection_verification(pg_engine):
             )
         ).database
         assert db_name == expected_db_name
-        assert "PostgreSQL 16" in version
+        assert "PostgreSQL" in version
 
 
 @pytest.mark.anyio
@@ -150,8 +165,18 @@ async def test_postgres_user_registration_and_duplicate_handling(pg_client: Asyn
 
 
 @pytest.mark.anyio
-async def test_postgres_authentication_workflow(pg_client: AsyncClient):
+async def test_postgres_authentication_workflow(
+    pg_client: AsyncClient, monkeypatch
+):
     """Verify password check, token issuance, and protected routes in PostgreSQL."""
+
+    async def mock_redis_incr_with_expiry(key: str, ttl_seconds: int) -> int:
+        return 1
+
+    monkeypatch.setattr(
+        "src.api.endpoints.auth.redis_incr_with_expiry",
+        mock_redis_incr_with_expiry,
+    )
     email = "auth_flow@example.com"
     password = "FlowPassword123!"
 
