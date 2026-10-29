@@ -1,3 +1,4 @@
+from src.schemas.query import ParsedQuery
 from src.schemas.title import (
     PaginatedTitleRead,
     TitleCreate,
@@ -9,6 +10,7 @@ from src.schemas.voice import TranscriptionResponse
 
 __all__ = [
     "PaginatedTitleRead",
+    "ParsedQuery",
     "TitleCreate",
     "TitleRead",
     "TitleUpdate",
