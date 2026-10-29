@@ -5,6 +5,7 @@ from src.schemas.title import (
     TitleUpdate,
 )
 from src.schemas.user import Token, TokenPayload, UserCreate, UserRead
+from src.schemas.voice import TranscriptionResponse
 
 __all__ = [
     "PaginatedTitleRead",
@@ -13,6 +14,7 @@ __all__ = [
     "TitleUpdate",
     "Token",
     "TokenPayload",
+    "TranscriptionResponse",
     "UserCreate",
     "UserRead",
 ]

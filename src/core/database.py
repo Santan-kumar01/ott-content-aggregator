@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     groq_api_key: str | None = None
     groq_transcription_model: str = "whisper-large-v3-turbo"
     groq_timeout_seconds: float = 30.0
+    max_voice_upload_bytes: int = 10 * 1024 * 1024  # 10 MB limit for voice search clips
 
     model_config = SettingsConfigDict(
         env_file=".env",
