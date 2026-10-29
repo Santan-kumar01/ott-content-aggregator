@@ -1,11 +1,12 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.database import get_db
+from src.core.cache import redis_incr_with_expiry
 from src.core.security import (
     create_access_token,
     decode_access_token,
@@ -108,10 +109,28 @@ async def register(data: UserCreate, db: DBSession):
     },
 )
 async def login(
+    request: Request,
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
     db: DBSession,
 ):
     """Authenticate credentials and return a signed JWT access token."""
+    client_host = request.client.host if request.client else "unknown"
+    rate_limit_key = f"auth:login:rate:{client_host}"
+
+    attempts = await redis_incr_with_expiry(rate_limit_key, 60)
+    if attempts is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Login service temporarily unavailable",
+            headers={"Retry-After": "60"},
+        )
+
+    if attempts > 5:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many login attempts. Please try again later.",
+            headers={"Retry-After": "60"},
+        )
     user = await auth_service.authenticate_user(
         db, email=form_data.username, password=form_data.password
     )

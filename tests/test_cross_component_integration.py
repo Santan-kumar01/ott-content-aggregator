@@ -89,10 +89,14 @@ async def auth_user_and_headers(integration_client):
     assert reg_res.status_code == 201
     user_data = reg_res.json()
 
-    login_res = await client.post(
-        "/api/v1/auth/login",
-        data={"username": email, "password": password},
-    )
+    with patch(
+        "src.api.endpoints.auth.redis_incr_with_expiry",
+        new=AsyncMock(return_value=1),
+    ):
+        login_res = await client.post(
+            "/api/v1/auth/login",
+            data={"username": email, "password": password},
+        )
     assert login_res.status_code == 200
     token = login_res.json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
@@ -131,10 +135,14 @@ async def test_auth_full_workflow_and_security_edge_cases(integration_client):
         assert user.hashed_password.startswith("$2b$") or len(user.hashed_password) > 30
 
     # 3. Login using username (instead of email) to exercise username fallback
-    user_login_res = await client.post(
-        "/api/v1/auth/login",
-        data={"username": username, "password": password},
-    )
+    with patch(
+        "src.api.endpoints.auth.redis_incr_with_expiry",
+        new=AsyncMock(return_value=1),
+    ):
+        user_login_res = await client.post(
+            "/api/v1/auth/login",
+            data={"username": username, "password": password},
+        )
     assert user_login_res.status_code == 200
     token = user_login_res.json()["access_token"]
 
@@ -211,18 +219,26 @@ async def test_auth_inactive_user_branches(integration_client):
         uid = inactive_user.id
 
     # 1. Login with email rejected for inactive user
-    email_login = await client.post(
-        "/api/v1/auth/login",
-        data={"username": email, "password": password},
-    )
+    with patch(
+        "src.api.endpoints.auth.redis_incr_with_expiry",
+        new=AsyncMock(return_value=1),
+    ):
+        email_login = await client.post(
+            "/api/v1/auth/login",
+            data={"username": email, "password": password},
+        )
     assert email_login.status_code == 400
     assert email_login.json()["detail"] == "Inactive user"
 
     # 2. Login with username rejected for inactive user
-    user_login = await client.post(
-        "/api/v1/auth/login",
-        data={"username": username, "password": password},
-    )
+    with patch(
+        "src.api.endpoints.auth.redis_incr_with_expiry",
+        new=AsyncMock(return_value=1),
+    ):
+        user_login = await client.post(
+            "/api/v1/auth/login",
+            data={"username": username, "password": password},
+        )
     assert user_login.status_code == 400
     assert user_login.json()["detail"] == "Inactive user"
 

@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import update
@@ -55,13 +57,17 @@ async def auth_headers(client: AsyncClient) -> dict[str, str]:
     )
     assert register_response.status_code == 201, register_response.text
 
-    login_response = await client.post(
-        "/api/v1/auth/login",
-        data={
-            "username": "catalogtester@example.com",
-            "password": "StrongPassword123!",
-        },
-    )
+    with patch(
+        "src.api.endpoints.auth.redis_incr_with_expiry",
+        new=AsyncMock(return_value=1),
+    ):
+        login_response = await client.post(
+            "/api/v1/auth/login",
+            data={
+                "username": "catalogtester@example.com",
+                "password": "StrongPassword123!",
+            },
+        )
     assert login_response.status_code == 200, login_response.text
 
     access_token = login_response.json()["access_token"]

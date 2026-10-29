@@ -33,7 +33,7 @@ def get_url() -> str:
     x_args = context.get_x_argument(as_dictionary=True)
 
     if x_args.get("url"):
-        return x_args["url"].replace("%", "%%")
+        return x_args["url"]
 
     current_url = config.get_main_option("sqlalchemy.url")
 
@@ -43,7 +43,7 @@ def get_url() -> str:
     if not current_url:
         raise RuntimeError("Database URL is not configured.")
 
-    return current_url.replace("%", "%%")
+    return current_url
 
 
 def run_migrations_offline() -> None:

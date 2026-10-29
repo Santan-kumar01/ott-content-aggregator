@@ -1,3 +1,5 @@
+from unittest.mock import AsyncMock, patch
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -25,11 +27,14 @@ async def client():
 
     app.dependency_overrides[get_db] = override_get_db
 
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as ac:
-        yield ac
-
+    with patch(
+        "src.api.endpoints.auth.redis_incr_with_expiry",
+        new=AsyncMock(return_value=1),
+    ):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as ac:
+            yield ac
     app.dependency_overrides.clear()
     await engine.dispose()
 
@@ -117,63 +122,66 @@ async def test_register_user_api_validation_errors(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_login_api_success(client: AsyncClient):
-    # Register first
-    await client.post(
-        "/api/v1/auth/register",
-        json={
-            "email": "bob@example.com",
-            "username": "bob",
-            "password": "BobPassword123!",
-        },
-    )
+    with patch("src.api.endpoints.auth.redis_incr_with_expiry", new=AsyncMock(return_value=1)):
+        # Register first
+        await client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": "bob@example.com",
+                "username": "bob",
+                "password": "BobPassword123!",
+            },
+        )
 
-    # Login using OAuth2 form data
-    login_response = await client.post(
-        "/api/v1/auth/login",
-        data={"username": "bob@example.com", "password": "BobPassword123!"},
-    )
+        # Login using OAuth2 form data
+        login_response = await client.post(
+            "/api/v1/auth/login",
+            data={"username": "bob@example.com", "password": "BobPassword123!"},
+        )
 
-    assert login_response.status_code == 200
-    token_data = login_response.json()
-    assert "access_token" in token_data
-    assert token_data["token_type"] == "bearer"
-    assert isinstance(token_data["access_token"], str)
+        assert login_response.status_code == 200
+        token_data = login_response.json()
+        assert "access_token" in token_data
+        assert token_data["token_type"] == "bearer"
+        assert isinstance(token_data["access_token"], str)
 
 
 @pytest.mark.anyio
 async def test_login_api_invalid_password(client: AsyncClient):
-    await client.post(
-        "/api/v1/auth/register",
-        json={
-            "email": "carol@example.com",
-            "username": "carol",
-            "password": "CarolPassword123!",
-        },
-    )
+    with patch("src.api.endpoints.auth.redis_incr_with_expiry", new=AsyncMock(return_value=1)):
+        await client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": "carol@example.com",
+                "username": "carol",
+                "password": "CarolPassword123!",
+            },
+        )
 
-    login_response = await client.post(
-        "/api/v1/auth/login",
-        data={"username": "carol@example.com", "password": "WrongPassword999!"},
-    )
+        login_response = await client.post(
+            "/api/v1/auth/login",
+            data={"username": "carol@example.com", "password": "WrongPassword999!"},
+        )
 
-    assert login_response.status_code == 401
-    assert login_response.json()["detail"] == "Incorrect email or password"
+        assert login_response.status_code == 401
+        assert login_response.json()["detail"] == "Incorrect email or password"
 
 
 @pytest.mark.anyio
 async def test_login_api_unknown_email(client: AsyncClient):
-    login_response = await client.post(
-        "/api/v1/auth/login",
-        data={"username": "nonexistent@example.com", "password": "AnyPassword123!"},
-    )
+    with patch("src.api.endpoints.auth.redis_incr_with_expiry", new=AsyncMock(return_value=1)):
+        login_response = await client.post(
+            "/api/v1/auth/login",
+            data={"username": "nonexistent@example.com", "password": "AnyPassword123!"},
+        )
 
-    assert login_response.status_code == 401
-    assert login_response.json()["detail"] == "Incorrect email or password"
+        assert login_response.status_code == 401
+        assert login_response.json()["detail"] == "Incorrect email or password"
 
 
-# ---------------------------------------------------------------------------
-# /me Endpoint Tests
-# ---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
+    # /me Endpoint Tests
+    # ---------------------------------------------------------------------------
 
 
 @pytest.mark.anyio
@@ -301,3 +309,39 @@ def test_authentication_error_responses_openapi_documentation():
             assert response_schema["$ref"] == (
                 "#/components/schemas/ErrorResponse"
             ), f"{method.upper()} {path} response {status_code}"
+
+@pytest.mark.anyio
+async def test_login_api_rate_limit_exceeded(client: AsyncClient):
+    with patch(
+        "src.api.endpoints.auth.redis_incr_with_expiry",
+        new=AsyncMock(return_value=6),
+    ) as mock_rate_limit:
+        response = await client.post(
+            "/api/v1/auth/login",
+            data={"username": "user@example.com", "password": "WrongPassword123!"},
+        )
+
+    assert response.status_code == 429
+    assert response.json()["detail"] == (
+        "Too many login attempts. Please try again later."
+    )
+    assert response.headers["Retry-After"] == "60"
+    mock_rate_limit.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_login_api_returns_503_when_redis_unavailable(
+    client: AsyncClient,
+):
+    with patch(
+        "src.api.endpoints.auth.redis_incr_with_expiry",
+        new=AsyncMock(return_value=None),
+    ):
+        response = await client.post(
+            "/api/v1/auth/login",
+            data={"username": "user@example.com", "password": "AnyPassword123!"},
+        )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Login service temporarily unavailable"
+    assert response.headers["Retry-After"] == "60"
