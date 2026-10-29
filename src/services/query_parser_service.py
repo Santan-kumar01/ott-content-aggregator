@@ -397,9 +397,18 @@ class QueryParserService:
 
     def _detect_content_type(self, text: str) -> str | None:
         lowered = text.lower()
-        if re.search(r"\b(?:movies?|films?)\b", lowered):
+        # Avoid false matching of the command verb "show" or "show me" at the start
+        text_without_show_verb = re.sub(
+            r"^(?:(?:please\s+)?(?:can\s+you\s+|could\s+you\s+)?show(?:\s+me)?\s+)",
+            "",
+            lowered,
+        ).strip()
+        if re.search(r"\b(?:movies?|films?)\b", text_without_show_verb):
             return "movie"
-        if re.search(r"\b(?:shows?|series|tv\s+shows?)\b", lowered):
+        if re.search(
+            r"\b(?:shows|series|tv\s+shows?|(?:the|a|an|tv|[a-z\-]+)\s+show)\b",
+            text_without_show_verb,
+        ):
             return "show"
         return None
 
