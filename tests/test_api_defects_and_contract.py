@@ -53,8 +53,8 @@ async def auth_headers(client: AsyncClient) -> dict[str, str]:
     assert reg_res.status_code == 201
 
     with patch(
-        "src.api.endpoints.auth.redis_incr_with_expiry",
-        new=AsyncMock(return_value=1),
+        "src.api.endpoints.auth.redis_incr_with_expiry_details",
+        new=AsyncMock(return_value=(1, 4, 60)),
     ):
         login_res = await client.post(
             "/api/v1/auth/login",

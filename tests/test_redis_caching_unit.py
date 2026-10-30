@@ -17,6 +17,7 @@ from src.core.cache import (
     redis_get,
     redis_incr,
     redis_incr_with_expiry,
+    redis_incr_with_expiry_details,
     redis_set,
     sanitize_redis_url,
     set_invalidation_pending,
@@ -296,8 +297,8 @@ async def unit_auth_headers(unit_client: AsyncClient) -> dict[str, str]:
     assert reg.status_code == 201
 
     with patch(
-        "src.api.endpoints.auth.redis_incr_with_expiry",
-        new=AsyncMock(return_value=1),
+        "src.api.endpoints.auth.redis_incr_with_expiry_details",
+        new=AsyncMock(return_value=(1, 4, 60)),
     ):
         login = await unit_client.post(
             "/api/v1/auth/login",
@@ -449,3 +450,94 @@ async def test_redis_incr_with_expiry_rejects_invalid_ttl():
 
     with pytest.raises(ValueError, match="ttl_seconds must be greater than zero"):
         await redis_incr_with_expiry("auth:rate:test", -1)
+
+@pytest.mark.anyio
+async def test_redis_incr_with_expiry_details_success():
+    """Returns count, remaining attempts, and actual Redis TTL."""
+    with patch("src.core.cache.get_redis_client") as mock_factory:
+        mock_client = AsyncMock()
+        mock_client.eval.return_value = [3, 47]
+        mock_factory.return_value = mock_client
+
+        result = await redis_incr_with_expiry_details("auth:rate:test", 60)
+
+        assert result == (3, 2, 47)
+        mock_client.eval.assert_awaited_once()
+        args = mock_client.eval.await_args.args
+        assert "INCR" in args[0]
+        assert "EXPIRE" in args[0]
+        assert "TTL" in args[0]
+        assert args[1:] == (1, "auth:rate:test", 60)
+
+
+@pytest.mark.anyio
+async def test_redis_incr_with_expiry_details_exhausted_limit():
+    """Returns zero remaining attempts when the limit is reached."""
+    with patch("src.core.cache.get_redis_client") as mock_factory:
+        mock_client = AsyncMock()
+        mock_client.eval.return_value = [5, 30]
+        mock_factory.return_value = mock_client
+
+        result = await redis_incr_with_expiry_details("auth:rate:test", 60)
+
+        assert result == (5, 0, 30)
+
+
+@pytest.mark.anyio
+async def test_redis_incr_with_expiry_details_handles_redis_failure():
+    """Returns None when Redis cannot execute the details script."""
+    with patch("src.core.cache.get_redis_client") as mock_factory:
+        mock_client = AsyncMock()
+        mock_client.eval.side_effect = RedisConnectionError("Connection refused")
+        mock_factory.return_value = mock_client
+
+        result = await redis_incr_with_expiry_details("auth:rate:test", 60)
+
+        assert result is None
+
+
+@pytest.mark.anyio
+async def test_redis_incr_with_expiry_details_returns_none_without_client():
+    """Returns None when no Redis client is available."""
+    with patch("src.core.cache.get_redis_client", return_value=None):
+        result = await redis_incr_with_expiry_details("auth:rate:test", 60)
+
+        assert result is None
+
+
+@pytest.mark.anyio
+async def test_redis_incr_with_expiry_details_rejects_invalid_ttl():
+    """Rejects zero or negative expiration windows."""
+    with pytest.raises(ValueError, match="ttl_seconds must be greater than zero"):
+        await redis_incr_with_expiry_details("auth:rate:test", 0)
+
+    with pytest.raises(ValueError, match="ttl_seconds must be greater than zero"):
+        await redis_incr_with_expiry_details("auth:rate:test", -1)
+
+@pytest.mark.anyio
+async def test_redis_incr_with_expiry_details_supports_custom_limit():
+    """Calculates remaining attempts using the configured maximum."""
+    with patch("src.core.cache.get_redis_client") as mock_factory:
+        mock_client = AsyncMock()
+        mock_client.eval.return_value = [3, 47]
+        mock_factory.return_value = mock_client
+
+        result = await redis_incr_with_expiry_details(
+            "auth:rate:test", 60, max_attempts=10
+        )
+
+        assert result == (3, 7, 47)
+
+
+@pytest.mark.anyio
+async def test_redis_incr_with_expiry_details_rejects_invalid_max_attempts():
+    """Rejects zero or negative attempt limits."""
+    with pytest.raises(ValueError, match="max_attempts must be greater than zero"):
+        await redis_incr_with_expiry_details(
+            "auth:rate:test", 60, max_attempts=0
+        )
+
+    with pytest.raises(ValueError, match="max_attempts must be greater than zero"):
+        await redis_incr_with_expiry_details(
+            "auth:rate:test", 60, max_attempts=-1
+        )

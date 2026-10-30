@@ -90,8 +90,8 @@ async def auth_user_and_headers(integration_client):
     user_data = reg_res.json()
 
     with patch(
-        "src.api.endpoints.auth.redis_incr_with_expiry",
-        new=AsyncMock(return_value=1),
+        "src.api.endpoints.auth.redis_incr_with_expiry_details",
+        new=AsyncMock(return_value=(1, 4, 60)),
     ):
         login_res = await client.post(
             "/api/v1/auth/login",
@@ -136,8 +136,8 @@ async def test_auth_full_workflow_and_security_edge_cases(integration_client):
 
     # 3. Login using username (instead of email) to exercise username fallback
     with patch(
-        "src.api.endpoints.auth.redis_incr_with_expiry",
-        new=AsyncMock(return_value=1),
+        "src.api.endpoints.auth.redis_incr_with_expiry_details",
+        new=AsyncMock(return_value=(1, 4, 60)),
     ):
         user_login_res = await client.post(
             "/api/v1/auth/login",
@@ -220,8 +220,8 @@ async def test_auth_inactive_user_branches(integration_client):
 
     # 1. Login with email rejected for inactive user
     with patch(
-        "src.api.endpoints.auth.redis_incr_with_expiry",
-        new=AsyncMock(return_value=1),
+        "src.api.endpoints.auth.redis_incr_with_expiry_details",
+        new=AsyncMock(return_value=(1, 4, 60)),
     ):
         email_login = await client.post(
             "/api/v1/auth/login",
@@ -232,8 +232,8 @@ async def test_auth_inactive_user_branches(integration_client):
 
     # 2. Login with username rejected for inactive user
     with patch(
-        "src.api.endpoints.auth.redis_incr_with_expiry",
-        new=AsyncMock(return_value=1),
+        "src.api.endpoints.auth.redis_incr_with_expiry_details",
+        new=AsyncMock(return_value=(1, 4, 60)),
     ):
         user_login = await client.post(
             "/api/v1/auth/login",

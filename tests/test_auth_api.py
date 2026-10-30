@@ -28,8 +28,8 @@ async def client():
     app.dependency_overrides[get_db] = override_get_db
 
     with patch(
-        "src.api.endpoints.auth.redis_incr_with_expiry",
-        new=AsyncMock(return_value=1),
+        "src.api.endpoints.auth.redis_incr_with_expiry_details",
+        new=AsyncMock(return_value=(1, 4, 60)),
     ):
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
@@ -122,7 +122,7 @@ async def test_register_user_api_validation_errors(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_login_api_success(client: AsyncClient):
-    with patch("src.api.endpoints.auth.redis_incr_with_expiry", new=AsyncMock(return_value=1)):
+    with patch("src.api.endpoints.auth.redis_incr_with_expiry_details", new=AsyncMock(return_value=(1, 4, 60))):
         # Register first
         await client.post(
             "/api/v1/auth/register",
@@ -140,6 +140,9 @@ async def test_login_api_success(client: AsyncClient):
         )
 
         assert login_response.status_code == 200
+        assert login_response.headers["RateLimit-Limit"] == "5"
+        assert login_response.headers["RateLimit-Remaining"] == "4"
+        assert login_response.headers["RateLimit-Reset"] == "60"
         token_data = login_response.json()
         assert "access_token" in token_data
         assert token_data["token_type"] == "bearer"
@@ -148,7 +151,7 @@ async def test_login_api_success(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_login_api_invalid_password(client: AsyncClient):
-    with patch("src.api.endpoints.auth.redis_incr_with_expiry", new=AsyncMock(return_value=1)):
+    with patch("src.api.endpoints.auth.redis_incr_with_expiry_details", new=AsyncMock(return_value=(1, 4, 60))):
         await client.post(
             "/api/v1/auth/register",
             json={
@@ -164,18 +167,24 @@ async def test_login_api_invalid_password(client: AsyncClient):
         )
 
         assert login_response.status_code == 401
+        assert login_response.headers["RateLimit-Limit"] == "5"
+        assert login_response.headers["RateLimit-Remaining"] == "4"
+        assert login_response.headers["RateLimit-Reset"] == "60"
         assert login_response.json()["detail"] == "Incorrect email or password"
 
 
 @pytest.mark.anyio
 async def test_login_api_unknown_email(client: AsyncClient):
-    with patch("src.api.endpoints.auth.redis_incr_with_expiry", new=AsyncMock(return_value=1)):
+    with patch("src.api.endpoints.auth.redis_incr_with_expiry_details", new=AsyncMock(return_value=(1, 4, 60))):
         login_response = await client.post(
             "/api/v1/auth/login",
             data={"username": "nonexistent@example.com", "password": "AnyPassword123!"},
         )
 
         assert login_response.status_code == 401
+        assert login_response.headers["RateLimit-Limit"] == "5"
+        assert login_response.headers["RateLimit-Remaining"] == "4"
+        assert login_response.headers["RateLimit-Reset"] == "60"
         assert login_response.json()["detail"] == "Incorrect email or password"
 
 
@@ -313,8 +322,8 @@ def test_authentication_error_responses_openapi_documentation():
 @pytest.mark.anyio
 async def test_login_api_rate_limit_exceeded(client: AsyncClient):
     with patch(
-        "src.api.endpoints.auth.redis_incr_with_expiry",
-        new=AsyncMock(return_value=6),
+        "src.api.endpoints.auth.redis_incr_with_expiry_details",
+        new=AsyncMock(return_value=(6, 0, 45)),
     ) as mock_rate_limit:
         response = await client.post(
             "/api/v1/auth/login",
@@ -325,7 +334,10 @@ async def test_login_api_rate_limit_exceeded(client: AsyncClient):
     assert response.json()["detail"] == (
         "Too many login attempts. Please try again later."
     )
-    assert response.headers["Retry-After"] == "60"
+    assert response.headers["Retry-After"] == "45"
+    assert response.headers["RateLimit-Limit"] == "5"
+    assert response.headers["RateLimit-Remaining"] == "0"
+    assert response.headers["RateLimit-Reset"] == "45"
     mock_rate_limit.assert_awaited_once()
 
 
@@ -334,7 +346,7 @@ async def test_login_api_returns_503_when_redis_unavailable(
     client: AsyncClient,
 ):
     with patch(
-        "src.api.endpoints.auth.redis_incr_with_expiry",
+        "src.api.endpoints.auth.redis_incr_with_expiry_details",
         new=AsyncMock(return_value=None),
     ):
         response = await client.post(
