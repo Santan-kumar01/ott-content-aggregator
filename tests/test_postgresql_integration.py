@@ -79,13 +79,13 @@ async def pg_client(pg_engine):
 
     from src.api.endpoints import auth
 
-    async def mock_redis_incr_with_expiry(
-        key: str, ttl_seconds: int
-    ) -> int:
-        return 1
+    async def mock_redis_incr_with_expiry_details(
+        key: str, ttl_seconds: int, max_attempts: int = 5
+    ) -> tuple[int, int, int]:
+        return (1, 4, 60)
 
-    original_limiter = auth.redis_incr_with_expiry
-    auth.redis_incr_with_expiry = mock_redis_incr_with_expiry
+    original_limiter = auth.redis_incr_with_expiry_details
+    auth.redis_incr_with_expiry_details = mock_redis_incr_with_expiry_details
 
     try:
         async with AsyncClient(
@@ -93,7 +93,7 @@ async def pg_client(pg_engine):
         ) as client:
             yield client
     finally:
-        auth.redis_incr_with_expiry = original_limiter
+        auth.redis_incr_with_expiry_details = original_limiter
         app.dependency_overrides.pop(get_db, None)
 
 
@@ -170,12 +170,14 @@ async def test_postgres_authentication_workflow(
 ):
     """Verify password check, token issuance, and protected routes in PostgreSQL."""
 
-    async def mock_redis_incr_with_expiry(key: str, ttl_seconds: int) -> int:
-        return 1
+    async def mock_redis_incr_with_expiry_details(
+        key: str, ttl_seconds: int, max_attempts: int = 5
+    ) -> tuple[int, int, int]:
+        return (1, 4, 60)
 
     monkeypatch.setattr(
-        "src.api.endpoints.auth.redis_incr_with_expiry",
-        mock_redis_incr_with_expiry,
+        "src.api.endpoints.auth.redis_incr_with_expiry_details",
+        mock_redis_incr_with_expiry_details,
     )
     email = "auth_flow@example.com"
     password = "FlowPassword123!"
