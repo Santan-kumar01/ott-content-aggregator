@@ -436,3 +436,82 @@ def test_downgrade_empty_tables_succeeds(tmp_path: Path):
         assert "titles" not in tables
     finally:
         verify_engine.dispose()
+
+
+def test_downgrade_preserves_title_data_and_blocks_accidental_drop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Verify that populated titles cannot be dropped without explicit permission."""
+    monkeypatch.delenv("ALLOW_DESTRUCTIVE_DOWNGRADE", raising=False)
+
+    db_file = tmp_path / "downgrade_titles_protect.db"
+    sync_url = f"sqlite:///{db_file.as_posix()}"
+    cfg = get_test_alembic_config(db_file)
+
+    command.upgrade(cfg, "head")
+
+    sync_engine = sa.create_engine(sync_url)
+    try:
+        with sync_engine.begin() as conn:
+            conn.execute(
+                sa.text("""
+                    INSERT INTO titles (
+                        id, name, content_type, release_year,
+                        genre, platform
+                    )
+                    VALUES (
+                        1, 'Protected Movie', 'movie', 2025,
+                        'Drama', 'Netflix'
+                    )
+                """)
+            )
+    finally:
+        sync_engine.dispose()
+
+    with pytest.raises(RuntimeError) as exc_info:
+        command.downgrade(cfg, "-1")
+
+    assert "Downgrade aborted: Table 'titles' contains data." in str(
+        exc_info.value
+    )
+
+    verify_engine = sa.create_engine(sync_url)
+    try:
+        with verify_engine.connect() as conn:
+            row = conn.execute(
+                sa.text("SELECT name FROM titles WHERE id = 1")
+            ).fetchone()
+
+            assert row is not None
+            assert row[0] == "Protected Movie"
+    finally:
+        verify_engine.dispose()
+
+
+@pytest.mark.parametrize(
+    "permission_value",
+    ["1", "true", "yes", "TRUE", "YES"],
+)
+def test_destructive_downgrade_accepts_permission_variants(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    permission_value: str,
+):
+    """Verify accepted destructive downgrade permission values."""
+    db_file = tmp_path / f"downgrade_{permission_value}.db"
+    cfg = get_test_alembic_config(db_file)
+
+    command.upgrade(cfg, "head")
+
+    monkeypatch.setenv("ALLOW_DESTRUCTIVE_DOWNGRADE", permission_value)
+
+    command.downgrade(cfg, "base")
+
+    verify_engine = sa.create_engine(f"sqlite:///{db_file.as_posix()}")
+    try:
+        tables = set(sa.inspect(verify_engine).get_table_names())
+        assert "users" not in tables
+        assert "titles" not in tables
+    finally:
+        verify_engine.dispose()
