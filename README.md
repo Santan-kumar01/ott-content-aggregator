@@ -7,15 +7,17 @@ A high-performance, asynchronous RESTful API built with **FastAPI**, **SQLAlchem
 ## Features
 
 - **Title Catalog Management**: Full CRUD operations for movies and series with metadata (genres, release year, director, cast, platform availability).
-- **Advanced Filtering**: Filter titles by genre, release year, language, rating, and streaming platform.
+- **Advanced Filtering & Search**: Filter titles by genre, release year, streaming platform, and search by keyword with pagination and dynamic multi-field sorting.
+- **Voice Transcription (Groq Speech-to-Text)**: Audio upload transcription using the official asynchronous Groq Python SDK powered by `whisper-large-v3-turbo`.
+- **Natural-Language Voice Search**: Deterministic, zero-LLM query parser extracting search keywords, canonical genres, target streaming platforms, release years, and media types directly from voice audio.
 - **JWT Authentication & Security**: Secure user registration, OAuth2 password flow login, cryptographically hashed passwords with `bcrypt`, and stateless JWT tokens.
-- **Protected Write Endpoints**: Title modifications (create, update, delete) are protected by Bearer authentication, while catalog browsing remains publicly accessible.
+- **Protected Write Endpoints**: Title modifications (create, update, delete) are protected by Bearer authentication, while catalog browsing and voice search remain publicly accessible.
 - **Asynchronous Database Access**: Built on SQLAlchemy 2.0 with the `asyncpg` PostgreSQL driver for high concurrency.
 - **Database Migrations**: Version-controlled schema migrations with **Alembic**.
-- **Caching**: Redis integration for accelerated query performance.
+- **Resilient Caching**: Redis integration with SHA-256 parameter hashing, versioned generation invalidation, and seamless fallback to PostgreSQL on Redis outages.
 - **External HTTP & Background Processing**: Non-blocking external provider metadata synchronization via shared `httpx.AsyncClient` and `FastAPI.BackgroundTasks` with bounded retries and observable job tracking.
-- **Interactive Documentation**: Auto-generated Swagger UI and ReDoc OpenAPI specifications.
-- **Comprehensive Test Suite**: Automated unit and integration tests using `pytest` and `httpx`.
+- **Interactive Documentation**: Auto-generated Swagger UI and ReDoc OpenAPI specifications with detailed status code responses.
+- **Comprehensive Test Suite**: Automated test suite across 18 modules (323 tests) using `pytest`, `pytest-asyncio`, and `httpx`.
 
 ---
 
@@ -27,6 +29,7 @@ A high-performance, asynchronous RESTful API built with **FastAPI**, **SQLAlchem
 - **ORM & Database Driver**: [SQLAlchemy 2.0](https://www.sqlalchemy.org/) & [asyncpg](https://github.com/MagicStack/asyncpg)
 - **Migrations**: [Alembic](https://alembic.sqlalchemy.org/)
 - **Validation & Settings**: [Pydantic v2](https://docs.pydantic.dev/) & [pydantic-settings](https://docs.pydantic.dev/latest/concepts/pydantic_settings/)
+- **Speech-to-Text**: [Groq Python SDK](https://console.groq.com/docs/speech-to-text) (`whisper-large-v3-turbo`)
 - **Security & Auth**: [python-jose](https://github.com/mpdavis/python-jose), [passlib](https://passlib.readthedocs.io/), and [bcrypt](https://github.com/pyca/bcrypt)
 - **Cache**: [Redis](https://redis.io/)
 - **HTTP Client & Background Tasks**: [HTTPX](https://www.python-httpx.org/) & FastAPI BackgroundTasks
@@ -121,6 +124,13 @@ CACHE_ENABLED=true
 EXTERNAL_API_TIMEOUT_SECONDS=10.0
 EXTERNAL_API_MAX_RETRIES=2
 EXTERNAL_PROVIDER_BASE_URL=https://api.example-ott-provider.com
+
+# Groq Speech-to-Text Settings (Voice Transcription & Voice Search)
+# Obtain your API key from https://console.groq.com/keys
+GROQ_API_KEY=<your_groq_api_key_here>
+GROQ_TRANSCRIPTION_MODEL=whisper-large-v3-turbo
+GROQ_TIMEOUT_SECONDS=30.0
+MAX_VOICE_UPLOAD_BYTES=10485760
 
 # Production Environment & CORS Configuration
 ENVIRONMENT=production
@@ -461,6 +471,8 @@ Similarly, updating (`PATCH /api/v1/titles/{id}`) and deleting (`DELETE /api/v1/
 | `POST` | `/api/v1/auth/register` | Public | Register a new user |
 | `POST` | `/api/v1/auth/login` | Public | Authenticate and obtain JWT token |
 | `GET` | `/api/v1/auth/me` | Protected | Get profile of authenticated user |
+| `POST` | `/api/v1/voice/transcribe` | Public | Transcribe audio upload via Groq (`whisper-large-v3-turbo`) |
+| `POST` | `/api/v1/voice/search` | Public | End-to-end voice catalog search (audio upload -> transcription -> query parsing -> catalog search) |
 | `GET` | `/api/v1/titles/` | Public | List and filter titles (Redis-cached) |
 | `GET` | `/api/v1/titles/paginated` | Public | Search, filter, sort, and paginate titles with pagination metadata (Redis-cached) |
 | `GET` | `/api/v1/titles/{id}` | Public | Retrieve a title by ID (Redis-cached) |
@@ -512,6 +524,159 @@ The `total` field reflects the total number of records matching all active searc
 
 
 ---
+
+---
+
+## Voice Search & Speech-to-Text Workflow
+
+Phase 2 introduces voice search and speech transcription powered by **Groq Speech-to-Text** (`whisper-large-v3-turbo`) paired with a deterministic natural-language query parser.
+
+### 1. Architecture & Request Pipeline
+
+```text
+[Audio Upload (WAV, MP3, M4A, FLAC, OGG, WebM)]
+                      │
+                      ▼
+    [_read_and_validate_audio_file]
+      - Magic-number validation (binary signature check)
+      - Upload limit enforcement (max 10 MB)
+      - Non-empty filename & payload verification
+                      │
+                      ▼
+    [GroqTranscriptionService] (AsyncGroq)
+      - Model: whisper-large-v3-turbo
+      - Safe error sanitization (no secret leakage)
+                      │
+                      ▼
+         Transcription Text (e.g. "Show me Inception")
+                      │
+         ┌────────────┴────────────┐
+         │ (if /voice/transcribe)  │ (if /voice/search)
+         ▼                         ▼
+ [Return text]           [QueryParserService]
+                           - Intent classification (search, genre_search, browse)
+                           - Cleaned search query extraction
+                           - Canonical genre mapping (12 supported genres)
+                           - Streaming platform extraction (Netflix, Prime, etc.)
+                           - Release year extraction (4-digit)
+                           - Content type detection (movie vs show)
+                           - Similarity intent detection
+                                   │
+                                   ▼
+                       [Catalog & Cache Service]
+                         - Redis cache lookup with SHA-256 parameter hash
+                         - PostgreSQL database query on cache miss or outage
+                         - In-memory content-type filtering
+                                   │
+                                   ▼
+                       [VoiceSearchResponse]
+                         - transcription text
+                         - structured parsed_query
+                         - matched catalog titles with platform availability
+                         - count and total records
+```
+
+### 2. Supported Audio Formats
+
+Audio payloads are validated by inspecting binary magic numbers (file signatures) to prevent malicious file extension spoofing:
+- **WAV**: Starts with `RIFF` and header `WAVE`
+- **MP3**: ID3v2 header (`ID3`) or MPEG frame sync word (`0xFF 0xE0`)
+- **M4A / MP4**: ISO Base Media container (`ftyp`)
+- **FLAC**: Signature `fLaC`
+- **OGG**: Ogg Vorbis/Opus container (`OggS`)
+- **WebM / Matroska**: EBML container (`\x1a\x45\xdf\xa3`)
+
+**Upload Size Limit**: 10 MB (`10,485,760` bytes). Larger uploads are immediately rejected with `HTTP 413 Payload Too Large`.
+
+---
+
+### 3. Natural-Language Query Parsing Capabilities
+
+The deterministic query parser (`src/services/query_parser_service.py`) processes transcripts without calling external LLMs:
+
+| Query Type | Input Voice Transcript | Extracted Criteria |
+|---|---|---|
+| **Title Search** | `"Show me Inception"` | `search_query="Inception"`, `intent="search"` |
+| **Genre Search** | `"Find action movies"` | `genre="Action"`, `content_type="movie"`, `intent="genre_search"` |
+| **Platform Filter** | `"Watch Breaking Bad on Netflix"` | `search_query="Breaking Bad"`, `platform="Netflix"` |
+| **Release Year** | `"Sci-Fi films from 2010"` | `genre="Sci-Fi"`, `release_year=2010`, `content_type="movie"` |
+| **Combined Filters** | `"Find comedy shows on Prime from 2020"` | `genre="Comedy"`, `platform="Prime"`, `release_year=2020`, `content_type="show"` |
+| **Similarity Query** | `"Movies like Interstellar"` | `similar_to="Interstellar"`, `is_similarity=True`, `search_query="Interstellar"` |
+| **Empty Audio** | `"   "` / silent audio | `intent="empty"`, returns safe `count=0, titles=[]` |
+
+Supported genres: `Action`, `Comedy`, `Drama`, `Sci-Fi`, `Horror`, `Animation`, `Documentary`, `Romance`, `Thriller`, `Mystery`, `Fantasy`, `Adventure`, `Western`, `Crime`.
+
+---
+
+### 4. Voice API Usage Examples
+
+#### Transcribe Audio (`POST /api/v1/voice/transcribe`)
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/voice/transcribe" \
+  -H "accept: application/json" \
+  -F "file=@sample_query.wav;type=audio/wav"
+```
+
+**Response (`200 OK`):**
+```json
+{
+  "text": "Show me Inception"
+}
+```
+
+#### Voice Catalog Search (`POST /api/v1/voice/search`)
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/voice/search?skip=0&limit=10" \
+  -H "accept: application/json" \
+  -F "file=@sample_query.wav;type=audio/wav"
+```
+
+**Response (`200 OK`):**
+```json
+{
+  "transcription": "Show me Inception",
+  "parsed_query": {
+    "raw_query": "Show me Inception",
+    "cleaned_query": "Inception",
+    "search_query": "Inception",
+    "genre": null,
+    "platform": null,
+    "release_year": null,
+    "content_type": null,
+    "is_similarity": false,
+    "similar_to": null,
+    "intent": "search"
+  },
+  "titles": [
+    {
+      "id": 1,
+      "name": "Inception",
+      "description": "Mind-bending sci-fi heist thriller",
+      "content_type": "movie",
+      "release_year": 2010,
+      "genre": "Sci-Fi",
+      "platform": "Netflix",
+      "created_at": "2026-10-25T16:00:00"
+    }
+  ],
+  "count": 1,
+  "total": 1
+}
+```
+
+#### Voice Error Responses
+
+| Status Code | Reason | Cause |
+|---|---|---|
+| `400 Bad Request` | Invalid Audio | Uploaded file is empty, missing a filename, or fails magic-byte signature validation. |
+| `413 Payload Too Large` | File Too Large | Uploaded audio file exceeds the 10 MB size limit (`MAX_VOICE_UPLOAD_BYTES`). |
+| `422 Unprocessable Entity` | Validation Error | Invalid pagination query parameters (`skip < 0`, `limit < 1`, or `limit > 100`). |
+| `429 Too Many Requests` | Rate Limit Exceeded | Upstream Groq Speech-to-Text API quota or rate limit exceeded. |
+| `502 Bad Gateway` | Provider Error | Upstream Groq API authentication failure or network connection failure. |
+| `503 Service Unavailable` | Configuration Missing | `GROQ_API_KEY` is not configured in the server environment. |
+| `504 Gateway Timeout` | Provider Timeout | Groq Speech-to-Text API request timed out. |
 
 ## Redis Caching Architecture
 
@@ -757,12 +922,34 @@ python -m pytest --cov=src --cov-report=html
    python -m pytest tests/test_migrations.py tests/test_migration_and_startup.py -v
    ```
 
+9. **Groq Transcription Service Tests** (Client lifecycle, timeout, retry, rate-limit error mapping):
+   ```powershell
+   python -m pytest tests/test_transcription_service.py -v
+   ```
+
+10. **Natural-Language Query Parser Tests** (Deterministic tokenizing, genre recognition, platform/year extraction):
+    ```powershell
+    python -m pytest tests/test_query_parser.py -v
+    ```
+
+11. **Voice Transcription API Endpoint Tests** (POST /api/v1/voice/transcribe contract, audio upload validation):
+    ```powershell
+    python -m pytest tests/test_voice_api.py -v
+    ```
+
+12. **Voice Catalog Search Integration Tests** (POST /api/v1/voice/search end-to-end, Redis fault tolerance, pagination):
+    ```powershell
+    python -m pytest tests/test_voice_search_api.py -v
+    ```
+
 ---
 
-### 5. Known Test Limitations
+### 5. Known Limitations & Architectural Notes
 
+- **In-Memory Audio Buffer Ceiling**: Uploaded audio files are buffered in memory up to `MAX_VOICE_UPLOAD_BYTES` (10 MB). For production deployments handling high concurrent traffic with audio streaming, a chunked streaming pipeline or object storage upload pattern (e.g. presigned S3 URLs) can be evaluated in subsequent iterations.
+- **Similarity Intent Without Vector Database**: Voice queries expressing similarity (e.g. `"Movies like Interstellar"`) are recognized by the query parser (`is_similarity=True`, `similar_to="Interstellar"`), and the primary title is queried directly. Semantic vector search (e.g. pgvector or dedicated vector databases) is deferred to future recommendation phases.
 - **FastAPI BackgroundTasks In-Process Execution**: Tasks execute asynchronously in the background within the active process event loop. If the application server process terminates abruptly, in-flight background jobs are not preserved in a durable queue.
-- **Docker Dependency for Live Integration**: If Docker is not running on the host machine, `test_postgresql_integration.py` will report connection failure, and `test_redis_integration.py` will skip gracefully with an informative message (`Live Redis service on localhost:6379 is not reachable`) rather than falsely claiming successful integration.
+- **Docker Dependency for Live Integration**: When running `pytest` in local development without containerized services, `test_postgresql_integration.py` and `test_redis_integration.py` gracefully skip with clear notices (`Live PostgreSQL/Redis service is not reachable`). Both suites execute and enforce live behavior in the automated GitHub Actions CI pipeline.
 
 ---
 
@@ -867,7 +1054,7 @@ ott-content-aggregator/
 ├── src/
 │   ├── api/
 │   │   ├── dependencies/         # Dependency injection (database, auth)
-│   │   └── endpoints/            # Route controllers (titles, auth)
+│   │   └── endpoints/            # Route controllers (titles, auth, voice)
 │   ├── core/
 │   │   ├── cache.py              # Redis client lifecycle, pooling, URL masking & health
 │   │   ├── database.py           # SQLAlchemy 2.0 engine, pool config & session factory
@@ -883,7 +1070,9 @@ ott-content-aggregator/
 │   │   ├── background_tasks.py   # Background task runner, session isolation & status registry
 │   │   ├── cache_service.py      # Catalog caching, deterministic keys & invalidation
 │   │   ├── catalog_service.py    # Database catalog CRUD, search, filter & pagination
-│   │   └── external_provider_service.py # Non-blocking external HTTP service with retries
+│   │   ├── external_provider_service.py # Non-blocking external HTTP service with retries
+│   │   ├── query_parser_service.py      # Deterministic natural-language catalog query parser
+│   │   └── transcription_service.py     # Asynchronous Groq Speech-to-Text transcription service
 │   └── main.py                   # FastAPI app factory, lifespan, security headers & health probes
 ├── tests/
 │   ├── test_api_defects_and_contract.py
@@ -895,11 +1084,15 @@ ott-content-aggregator/
 │   ├── test_migration_and_startup.py        # Startup, health probes & security headers
 │   ├── test_migrations.py
 │   ├── test_postgresql_integration.py       # Genuine PostgreSQL integration tests
+│   ├── test_query_parser.py                 # Natural-language query parser tests (103 tests)
 │   ├── test_redis_caching_unit.py           # Redis unit & resilience tests
 │   ├── test_redis_integration.py            # Live Redis integration tests
 │   ├── test_security.py
 │   ├── test_title_protection.py
-│   └── test_user_model_schemas.py
+│   ├── test_transcription_service.py        # Groq transcription service unit tests
+│   ├── test_user_model_schemas.py
+│   ├── test_voice_api.py                    # Voice transcription API tests
+│   └── test_voice_search_api.py             # Voice search end-to-end integration tests
 ├── scratch/
 │   ├── benchmark_catalog.py      # Repeatable catalog performance benchmark script
 │   └── benchmark_results.json    # Measured latency & speedup metrics

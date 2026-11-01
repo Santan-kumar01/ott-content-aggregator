@@ -34,6 +34,27 @@ CHUNK_SIZE = 64 * 1024  # 64 KB streaming chunk size
 
 HTTP_413_TOO_LARGE = getattr(status, "HTTP_413_CONTENT_TOO_LARGE", None) or 413
 
+VOICE_ERROR_RESPONSES = {
+    status.HTTP_400_BAD_REQUEST: {
+        "description": "Invalid or empty audio payload, missing filename, or unrecognized audio format.",
+    },
+    HTTP_413_TOO_LARGE: {
+        "description": "Audio file exceeds maximum allowed size ceiling (10 MB).",
+    },
+    status.HTTP_429_TOO_MANY_REQUESTS: {
+        "description": "Upstream speech transcription provider rate limit exceeded.",
+    },
+    status.HTTP_502_BAD_GATEWAY: {
+        "description": "Upstream transcription provider authentication or network failure.",
+    },
+    status.HTTP_503_SERVICE_UNAVAILABLE: {
+        "description": "Transcription service configuration (GROQ_API_KEY) is missing on server.",
+    },
+    status.HTTP_504_GATEWAY_TIMEOUT: {
+        "description": "Upstream transcription provider timed out.",
+    },
+}
+
 
 def is_valid_audio_payload(data: bytes) -> bool:
     """Inspect magic numbers/file signatures to verify recognized audio format.
@@ -189,6 +210,7 @@ def _handle_transcription_exception(exc: BaseException) -> None:
     "/transcribe",
     response_model=TranscriptionResponse,
     status_code=status.HTTP_200_OK,
+    responses=VOICE_ERROR_RESPONSES,
     summary="Transcribe uploaded audio file",
     description=(
         "Accepts an uploaded audio file (WAV, MP3, M4A, FLAC, OGG, or WebM) "
@@ -219,6 +241,7 @@ async def transcribe_audio_endpoint(
     "/search",
     response_model=VoiceSearchResponse,
     status_code=status.HTTP_200_OK,
+    responses=VOICE_ERROR_RESPONSES,
     summary="Voice catalog search",
     description=(
         "Accepts an uploaded audio query (WAV, MP3, M4A, FLAC, OGG, or WebM), "
