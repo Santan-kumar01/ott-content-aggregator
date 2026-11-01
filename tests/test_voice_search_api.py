@@ -660,7 +660,9 @@ async def test_voice_search_succeeds_even_when_cache_service_fails(
     ), patch(
         "src.services.catalog_service.list_titles",
         side_effect=real_list_titles,
-    ) as spy_list_titles, caplog.at_level(logging.WARNING):
+    ) as spy_list_titles, patch(
+        "src.api.endpoints.voice.logger.warning"
+    ) as mock_logger_warning, caplog.at_level(logging.WARNING):
         response = await client.post("/api/v1/voice/search", files=files)
 
     assert response.status_code == 200
@@ -676,9 +678,13 @@ async def test_voice_search_succeeds_even_when_cache_service_fails(
     assert "supersecret" not in response.text.lower()
 
     # Verify warning logs recorded the exception class names without sensitive credentials
-    assert "Cache lookup failed during voice search: ConnectionRefusedError" in caplog.text
-    assert "Failed to populate catalog cache in voice search: TimeoutError" in caplog.text
-    assert "supersecret" not in caplog.text
+    assert mock_logger_warning.call_count == 2
+    warning_calls = [c.args for c in mock_logger_warning.call_args_list]
+    warning_messages = [m % tuple(a) if a else m for m, *a in warning_calls]
+    warning_text = " ".join(warning_messages) + " " + caplog.text
+    assert "Cache lookup failed during voice search: ConnectionRefusedError" in warning_text
+    assert "Failed to populate catalog cache in voice search: TimeoutError" in warning_text
+    assert "supersecret" not in warning_text
 
 
 @pytest.mark.anyio
