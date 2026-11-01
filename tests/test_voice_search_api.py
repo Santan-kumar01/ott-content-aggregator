@@ -23,9 +23,11 @@ from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from src.core.cache import get_redis_client
 from src.core.database import Base, get_db
 from src.main import app
 from src.models.title import Title
+from src.services.cache_service import CATALOG_GENERATION_KEY
 from src.services.query_parser_service import (
     QueryParserService,
     get_query_parser_service,
@@ -170,6 +172,14 @@ async def client_and_db(mock_transcription_service, query_parser):
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_transcription_service] = lambda: mock_transcription_service
     app.dependency_overrides[get_query_parser_service] = lambda: query_parser
+
+    # Isolate Redis catalog generation between test cases when live Redis is present
+    redis_client = get_redis_client()
+    if redis_client is not None:
+        try:
+            await redis_client.incr(CATALOG_GENERATION_KEY)
+        except Exception:
+            pass
 
     try:
         async with AsyncClient(
@@ -572,7 +582,8 @@ async def test_search_catalog_failure_returns_safe_500(
     wav_bytes = make_valid_wav_bytes(200)
     files = {"file": ("query.wav", wav_bytes, "audio/wav")}
 
-    with patch("src.services.catalog_service.list_titles", side_effect=Exception("Database lock error")):
+    with patch("src.services.cache_service.get_catalog_list", new=AsyncMock(return_value=None)), \
+         patch("src.services.catalog_service.list_titles", side_effect=Exception("Database lock error")):
         response = await client.post("/api/v1/voice/search", files=files)
 
     assert response.status_code == 500
