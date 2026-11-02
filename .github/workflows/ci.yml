@@ -1,17 +1,30 @@
+
 name: CI Pipeline
 
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   test:
-    name: Test & Migration Verification
+    name: Test and Migration Verification
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+
+    env:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres_ci_test_password@localhost:5432/ott_ci_test_db
+      POSTGRES_TEST_URL: postgresql+asyncpg://postgres:postgres_ci_test_password@localhost:5432/ott_ci_test_db
+      REDIS_URL: redis://localhost:6379/0
+      JWT_SECRET_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      JWT_ALGORITHM: HS256
+      ACCESS_TOKEN_EXPIRE_MINUTES: 30
+      CACHE_ENABLED: "true"
+      CACHE_TTL_SECONDS: 300
+      ENVIRONMENT: testing
 
     services:
       postgres:
@@ -23,23 +36,26 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd pg_isready
+          --health-cmd "pg_isready -U postgres -d ott_ci_test_db"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
 
-    env:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres_ci_test_password@localhost:5432/ott_ci_test_db
-      JWT_SECRET_KEY: ci-test-secret-key-at-least-32-bytes-long-for-hs256
-      JWT_ALGORITHM: HS256
-      ACCESS_TOKEN_EXPIRE_MINUTES: 30
-      REDIS_URL: redis://localhost:6379/0
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -48,13 +64,43 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          python -m pip install -r requirements.txt
+          python -m pip install pytest-cov
 
       - name: Run Alembic migrations against PostgreSQL
         run: |
           python -m alembic upgrade head
           python -m alembic current
 
-      - name: Run pytest test suite
+      - name: Run automated tests with coverage
         run: |
-          python -m pytest
+          python -m pytest --cov=src --cov-report=term-missing --cov-report=xml -v
+
+  docker-build:
+    name: Docker Build and Sanity
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        run: docker build -t ott-content-aggregator:ci .
+
+      - name: Verify non-root container user
+        run: |
+          USER=$(docker run --rm ott-content-aggregator:ci whoami)
+          echo "Container running as user: $USER"
+          test "$USER" = "appuser"
+
+      - name: Verify application import
+        run: |
+          docker run --rm \
+            -e DATABASE_URL="postgresql+asyncpg://postgres:postgres@localhost:5432/ott_db" \
+            -e JWT_SECRET_KEY="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" \
+            ott-content-aggregator:ci \
+            python -c "import src.main; print('Application import verified')"

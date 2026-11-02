@@ -1,3 +1,5 @@
+from unittest.mock import AsyncMock, patch
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -48,10 +50,14 @@ async def auth_headers(client: AsyncClient) -> dict[str, str]:
     )
     assert reg_res.status_code == 201
 
-    login_res = await client.post(
-        "/api/v1/auth/login",
-        data={"username": "creator@example.com", "password": "StrongPassword123!"},
-    )
+    with patch(
+        "src.api.endpoints.auth.redis_incr_with_expiry_details",
+        new=AsyncMock(return_value=(1, 4, 60)),
+    ):
+        login_res = await client.post(
+            "/api/v1/auth/login",
+            data={"username": "creator@example.com", "password": "StrongPassword123!"},
+        )
     assert login_res.status_code == 200
     token = login_res.json()["access_token"]
     return {"Authorization": f"Bearer {token}"}
@@ -110,12 +116,12 @@ async def test_update_title_unauthenticated_rejected(client: AsyncClient):
     update_payload = {"name": "Updated Title Name"}
 
     # No Authorization header
-    res_no_auth = await client.put("/api/v1/titles/1", json=update_payload)
+    res_no_auth = await client.patch("/api/v1/titles/1", json=update_payload)
     assert res_no_auth.status_code == 401
     assert res_no_auth.json()["detail"] == "Authentication token is missing"
 
     # Invalid Authorization header
-    res_bad_auth = await client.put(
+    res_bad_auth = await client.patch(
         "/api/v1/titles/1",
         json=update_payload,
         headers={"Authorization": "Bearer invalid.token.signature"},
@@ -179,7 +185,7 @@ async def test_authenticated_title_crud_lifecycle(
         "name": "Interstellar (Updated Edition)",
         "genre": "Adventure",
     }
-    update_res = await client.put(
+    update_res = await client.patch(
         f"/api/v1/titles/{title_id}",
         json=update_payload,
         headers=auth_headers,

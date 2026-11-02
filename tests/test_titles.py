@@ -1,8 +1,8 @@
-
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock
+from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from jose import jwt
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import (
@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from src.core.database import Base, get_db
+from src.core.database import Base, get_db, settings
 from src.main import app
 from src.models.title import Title
 
@@ -61,13 +61,17 @@ async def auth_headers(client: AsyncClient) -> dict[str, str]:
     )
     assert register_response.status_code == 201, register_response.text
 
-    login_response = await client.post(
-        "/api/v1/auth/login",
-        data={
-            "username": "validation@example.com",
-            "password": "StrongPassword123!",
-        },
-    )
+    with patch(
+        "src.api.endpoints.auth.redis_incr_with_expiry_details",
+        new=AsyncMock(return_value=(1, 4, 60)),
+    ):
+        login_response = await client.post(
+            "/api/v1/auth/login",
+            data={
+                "username": "validation@example.com",
+                "password": "StrongPassword123!",
+            },
+        )
     assert login_response.status_code == 200, login_response.text
 
     access_token = login_response.json()["access_token"]
@@ -79,14 +83,42 @@ async def test_health_endpoint(client: AsyncClient):
     response = await client.get("/health")
 
     assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "healthy"
+    assert data["database"] in {"connected", "disconnected"}
+    assert data["redis"] in {"connected", "disconnected"}
+
+
+@pytest.mark.anyio
+async def test_readiness_endpoint(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from src import main
+
+    mock_connection = MagicMock()
+    mock_connection.execute = AsyncMock(return_value=None)
+
+    mock_engine = MagicMock()
+    mock_engine.connect.return_value.__aenter__ = AsyncMock(
+        return_value=mock_connection
+    )
+    mock_engine.connect.return_value.__aexit__ = AsyncMock(
+        return_value=False
+    )
+    monkeypatch.setattr(main, "engine", mock_engine)
+
+    response = await client.get("/ready")
+
+    assert response.status_code == 200
     assert response.json() == {
-        "status": "healthy",
+        "status": "ready",
         "database": "connected",
     }
 
 
 @pytest.mark.anyio
-async def test_health_endpoint_returns_503_when_database_fails(
+async def test_readiness_endpoint_returns_503_when_database_fails(
     client: AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -107,16 +139,15 @@ async def test_health_endpoint_returns_503_when_database_fails(
 
     monkeypatch.setattr(main, "engine", mock_engine)
 
-    response = await client.get("/health")
+    response = await client.get("/ready")
 
     assert response.status_code == 503
     assert response.json() == {
         "detail": {
-            "status": "unhealthy",
+            "status": "not_ready",
             "database": "disconnected",
         }
     }
-
 
 @pytest.mark.anyio
 async def test_create_title_invalid_year(
@@ -550,9 +581,9 @@ async def test_paginated_titles_sort_by_name_or_release_year(
     )
 
     assert response.status_code == 200, response.text
-    assert [title["name"] for title in response.json()["items"]] == (
-        expected_names
-    )
+    assert [
+        title["name"] for title in response.json()["items"]
+    ] == expected_names
 
 
 @pytest.mark.anyio
@@ -669,6 +700,319 @@ async def test_list_titles_rejects_invalid_search_and_sort_parameters(
     response = await client.get(f"/api/v1/titles/paginated?{query}")
 
     assert response.status_code == 422
+
+
+def test_title_list_openapi_documentation():
+    """Verify catalog list endpoint documentation in OpenAPI."""
+    schema = app.openapi()
+    operation = schema["paths"]["/api/v1/titles"]["get"]
+
+    assert operation["summary"] == "List and search catalog titles"
+    assert "case-insensitive" in operation["description"]
+
+    parameters = {
+        parameter["name"]: parameter
+        for parameter in operation["parameters"]
+    }
+
+    search_schema = parameters["search"]["schema"]
+    string_schema = next(
+        item
+        for item in search_schema["anyOf"]
+        if item.get("type") == "string"
+    )
+
+    assert string_schema["minLength"] == 1
+    assert string_schema["maxLength"] == 200
+    assert (
+        "Case-insensitive partial match"
+        in parameters["search"]["description"]
+    )
+
+    assert "sort_by" in parameters
+    assert "sort_order" in parameters
+    assert "skip" in parameters
+    assert "limit" in parameters
+
+
+def test_paginated_titles_openapi_documentation():
+    """Verify paginated endpoint summary and response schema."""
+    schema = app.openapi()
+    operation = schema["paths"]["/api/v1/titles/paginated"]["get"]
+
+    assert operation["summary"] == (
+        "List catalog titles with pagination metadata"
+    )
+    assert "has_next" in operation["description"]
+
+    response_schema = operation["responses"]["200"]["content"][
+        "application/json"
+    ]["schema"]
+
+    assert response_schema["$ref"].endswith("/PaginatedTitleRead")
+
+
+def test_catalog_error_responses_use_error_response_schema():
+    """Verify catalog error responses reference the reusable ErrorResponse schema."""
+    schema = app.openapi()
+    paths = schema["paths"]
+
+    expected_responses = {
+        ("/api/v1/titles", "post"): ["401", "422"],
+        ("/api/v1/titles/{title_id}", "get"): ["404"],
+        ("/api/v1/titles/{title_id}", "patch"): ["401", "404", "422"],
+        ("/api/v1/titles/{title_id}", "delete"): ["401", "404"],
+    }
+
+    for (path, method), status_codes in expected_responses.items():
+        operation = paths[path][method]
+
+        for status_code in status_codes:
+            response = operation["responses"][status_code]
+            response_schema = response["content"]["application/json"]["schema"]
+
+            assert response_schema["$ref"] == (
+                "#/components/schemas/ErrorResponse"
+            ), f"{method.upper()} {path} response {status_code}"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("method", "field", "invalid_value"),
+    [
+        ("post", "name", ""),
+        ("post", "name", "N" * 201),
+        ("post", "description", "D" * 2001),
+        ("post", "genre", ""),
+        ("post", "platform", "P" * 101),
+        ("post", "release_year", 2101),
+        ("patch", "name", ""),
+        ("patch", "description", "D" * 2001),
+        ("patch", "genre", ""),
+        ("patch", "platform", "P" * 101),
+    ],
+)
+async def test_title_endpoints_reject_invalid_field_boundaries(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+    method: str,
+    field: str,
+    invalid_value: str | int,
+):
+    """Reject title payloads that violate schema boundary constraints."""
+    payload = {
+        "name": "Boundary Test Movie",
+        "description": "Valid description",
+        "content_type": "movie",
+        "release_year": 2020,
+        "genre": "Drama",
+        "platform": "Netflix",
+    }
+    payload[field] = invalid_value
+
+    if method == "post":
+        response = await client.post(
+            "/api/v1/titles",
+            json=payload,
+            headers=auth_headers,
+        )
+    else:
+        response = await client.patch(
+            "/api/v1/titles/1",
+            json=payload,
+            headers=auth_headers,
+        )
+
+    assert response.status_code == 422, response.text
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("sort_order", ["asc", "desc"])
+async def test_paginated_titles_use_id_as_stable_sort_tiebreaker(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+    sort_order: str,
+):
+    """Keep equal primary sort values ordered by ascending title ID."""
+    created_titles = []
+
+    for name in ["First Inserted", "Second Inserted", "Third Inserted"]:
+        response = await client.post(
+            "/api/v1/titles",
+            json={
+                "name": name,
+                "description": "Stable sorting regression test",
+                "content_type": "movie",
+                "release_year": 2024,
+                "genre": "Drama",
+                "platform": "Netflix",
+            },
+            headers=auth_headers,
+        )
+        assert response.status_code == 201, response.text
+        created_titles.append(response.json())
+
+    session_generator = app.dependency_overrides[get_db]()
+    session = await session_generator.__anext__()
+    try:
+        for title, new_name in zip(
+            created_titles,
+            ["Third Inserted", "Second Inserted", "First Inserted"],
+        ):
+            await session.execute(
+                update(Title)
+                .where(Title.id == title["id"])
+                .values(name=new_name)
+            )
+        await session.commit()
+    finally:
+        await session_generator.aclose()
+
+    response = await client.get(
+        f"/api/v1/titles/paginated?sort_by=release_year&sort_order={sort_order}"
+    )
+
+    assert response.status_code == 200, response.text
+    result_titles = response.json()["items"]
+
+    assert [title["id"] for title in result_titles] == sorted(
+        title["id"] for title in result_titles
+    )
+    assert [title["name"] for title in result_titles] == [
+        "Third Inserted",
+        "Second Inserted",
+        "First Inserted",
+    ]
+
+@pytest.mark.anyio
+async def test_health_endpoint_stays_healthy_when_database_fails(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from src import main
+
+    mock_engine = MagicMock()
+    mock_engine.connect.side_effect = RuntimeError(
+        "Database connection failed"
+    )
+
+    monkeypatch.setattr(main, "engine", mock_engine)
+
+    response = await client.get("/health")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "healthy"
+    assert data["database"] in {"connected", "disconnected"}
+    assert data["redis"] in {"connected", "disconnected"}
+
+@pytest.mark.anyio
+async def test_paginated_titles_offset_beyond_total_returns_empty_items(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+):
+    for i in range(2):
+        response = await client.post(
+            "/api/v1/titles",
+            json={
+                "name": f"Offset Boundary Movie {i}",
+                "description": "Pagination boundary test",
+                "content_type": "movie",
+                "release_year": 2024,
+                "genre": "Drama",
+                "platform": "Netflix",
+            },
+            headers=auth_headers,
+        )
+        assert response.status_code == 201, response.text
+
+    response = await client.get(
+        "/api/v1/titles/paginated?skip=2&limit=1"
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+
+    assert data["items"] == []
+    assert data["total"] == 2
+    assert data["skip"] == 2
+    assert data["limit"] == 1
+    assert data["has_next"] is False
+
+@pytest.mark.anyio
+async def test_create_title_without_authentication_returns_401(
+    client: AsyncClient,
+):
+    payload = {
+        "name": "Unauthorized Movie",
+        "description": "Should not be created without authentication",
+        "content_type": "movie",
+        "release_year": 2024,
+        "genre": "Drama",
+        "platform": "Netflix",
+    }
+
+    response = await client.post(
+        "/api/v1/titles",
+        json=payload,
+    )
+
+    assert response.status_code == 401
+
+@pytest.mark.anyio
+async def test_create_title_with_invalid_bearer_token_returns_401(
+    client: AsyncClient,
+):
+    payload = {
+        "name": "Invalid Token Movie",
+        "description": "Should not be created with an invalid token",
+        "content_type": "movie",
+        "release_year": 2024,
+        "genre": "Drama",
+        "platform": "Netflix",
+    }
+    headers = {"Authorization": "Bearer invalid.token.value"}
+
+    response = await client.post(
+        "/api/v1/titles",
+        json=payload,
+        headers=headers,
+    )
+
+    assert response.status_code == 401
+
+@pytest.mark.anyio
+async def test_create_title_with_expired_token_returns_401(
+    client: AsyncClient,
+):
+    now = datetime.now(timezone.utc)
+    expired_token = jwt.encode(
+        {
+            "sub": "expired_user",
+            "iat": int((now - timedelta(hours=2)).timestamp()),
+            "exp": int((now - timedelta(hours=1)).timestamp()),
+        },
+        settings.jwt_secret_key,
+        algorithm=settings.jwt_algorithm,
+    )
+
+    payload = {
+        "name": "Expired Token Movie",
+        "description": "Should not be created with an expired token",
+        "content_type": "movie",
+        "release_year": 2024,
+        "genre": "Drama",
+        "platform": "Netflix",
+    }
+
+    response = await client.post(
+        "/api/v1/titles",
+        json=payload,
+        headers={"Authorization": f"Bearer {expired_token}"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Token has expired"
 
 
 @pytest.mark.anyio

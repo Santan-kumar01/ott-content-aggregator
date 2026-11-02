@@ -1,11 +1,12 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.database import get_db
+from src.core.cache import redis_incr_with_expiry_details
 from src.core.security import (
     create_access_token,
     decode_access_token,
@@ -13,10 +14,14 @@ from src.core.security import (
     verify_password,
 )
 from src.models.user import User
+from src.schemas.error import ErrorResponse
 from src.schemas.user import Token, UserCreate, UserRead
 from src.services import auth_service
 
 router = APIRouter(tags=["Authentication"])
+
+LOGIN_RATE_LIMIT = 5
+LOGIN_RATE_LIMIT_WINDOW = 60
 
 DBSession = Annotated[AsyncSession, Depends(get_db)]
 
@@ -72,6 +77,16 @@ CurrentUser = Annotated[User, Depends(get_current_user)]
     "/register",
     response_model=UserRead,
     status_code=status.HTTP_201_CREATED,
+    responses={
+        400: {
+            "model": ErrorResponse,
+            "description": "Email is already registered",
+        },
+        422: {
+            "model": ErrorResponse,
+            "description": "Invalid registration data",
+        },
+    },
 )
 async def register(data: UserCreate, db: DBSession):
     """Register a new user account."""
@@ -81,12 +96,57 @@ async def register(data: UserCreate, db: DBSession):
 @router.post(
     "/login",
     response_model=Token,
+    responses={
+        400: {
+            "model": ErrorResponse,
+            "description": "User account is inactive",
+        },
+        401: {
+            "model": ErrorResponse,
+            "description": "Invalid login credentials",
+        },
+        422: {
+            "model": ErrorResponse,
+            "description": "Invalid login form data",
+        },
+    },
 )
 async def login(
+    request: Request,
+    response: Response,
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
     db: DBSession,
 ):
     """Authenticate credentials and return a signed JWT access token."""
+    client_host = request.client.host if request.client else "unknown"
+    rate_limit_key = f"auth:login:rate:{client_host}"
+
+    rate_limit = await redis_incr_with_expiry_details(
+        rate_limit_key, LOGIN_RATE_LIMIT_WINDOW, max_attempts=LOGIN_RATE_LIMIT
+    )
+    if rate_limit is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Login service temporarily unavailable",
+            headers={"Retry-After": "60"},
+        )
+
+    attempts, remaining, reset = rate_limit
+
+    rate_headers = {
+        "RateLimit-Limit": str(LOGIN_RATE_LIMIT),
+        "RateLimit-Remaining": str(remaining),
+        "RateLimit-Reset": str(reset),
+    }
+    response.headers.update(rate_headers)
+
+    if attempts > LOGIN_RATE_LIMIT:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many login attempts. Please try again later.",
+            headers={**rate_headers, "Retry-After": str(max(1, reset))},
+        )
+
     user = await auth_service.authenticate_user(
         db, email=form_data.username, password=form_data.password
     )
@@ -97,20 +157,26 @@ async def login(
             select(User).where(User.username == form_data.username)
         )
         candidate = result.first()
-        if candidate and verify_password(form_data.password, candidate.hashed_password):
+        if candidate and verify_password(
+            form_data.password, candidate.hashed_password
+        ):
             user = candidate
 
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
-            headers={"WWW-Authenticate": "Bearer"},
+            headers={
+                "WWW-Authenticate": "Bearer",
+                **rate_headers,
+            },
         )
 
     if not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Inactive user",
+            headers=rate_headers,
         )
 
     access_token = create_access_token(subject=str(user.id))
@@ -120,6 +186,16 @@ async def login(
 @router.get(
     "/me",
     response_model=UserRead,
+    responses={
+        400: {
+            "model": ErrorResponse,
+            "description": "User account is inactive",
+        },
+        401: {
+            "model": ErrorResponse,
+            "description": "Authentication is required or invalid",
+        },
+    },
 )
 async def get_me(current_user: CurrentUser):
     """Retrieve profile information for the currently authenticated user."""

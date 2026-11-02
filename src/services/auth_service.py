@@ -1,5 +1,6 @@
 from fastapi import HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.security import hash_password, verify_password
@@ -36,9 +37,20 @@ async def register_user(
         hashed_password=hash_password(data.password),
     )
     db.add(user)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email already registered",
+        )
+    except Exception:
+        await db.rollback()
+        raise
     await db.refresh(user)
     return user
+
 
 
 async def authenticate_user(
