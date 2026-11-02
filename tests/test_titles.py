@@ -669,3 +669,109 @@ async def test_list_titles_rejects_invalid_search_and_sort_parameters(
     response = await client.get(f"/api/v1/titles/paginated?{query}")
 
     assert response.status_code == 422
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("search", "expected_names"),
+    [
+        ("  Batman  ", ["Batman Begins"]),
+        (
+            "   ",
+            ["A_B Movie", r"A\B Movie", "Batman Begins", "Superman Returns"],
+        ),
+        ("A_B", ["A_B Movie"]),
+        (r"A\B", ["A\\B Movie"]),
+    ],
+)
+async def test_title_search_normalizes_whitespace_and_escapes_literals(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+    search: str,
+    expected_names: list[str],
+):
+    titles = [
+        ("Batman Begins", "A hero story"),
+        ("Superman Returns", "A hero story"),
+        ("A_B Movie", "Underscore example"),
+        (r"A\B Movie", "Backslash example"),
+    ]
+
+    for name, description in titles:
+        response = await client.post(
+            "/api/v1/titles",
+            json={
+                "name": name,
+                "description": description,
+                "content_type": "movie",
+                "release_year": 2024,
+                "genre": "Drama",
+                "platform": "Netflix",
+            },
+            headers=auth_headers,
+        )
+        assert response.status_code == 201, response.text
+
+    response = await client.get(
+        "/api/v1/titles",
+        params={"search": search},
+    )
+
+    assert response.status_code == 200, response.text
+    assert sorted(title["name"] for title in response.json()) == sorted(
+        expected_names
+    )
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("search", "expected_names"),
+    [
+        ("  Batman  ", ["Batman Begins"]),
+        (
+            "   ",
+            ["A_B Movie", r"A\B Movie", "Batman Begins", "Superman Returns"],
+        ),
+        ("A_B", ["A_B Movie"]),
+        (r"A\B", [r"A\B Movie"]),
+    ],
+)
+async def test_paginated_title_search_normalizes_whitespace_and_escapes_literals(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+    search: str,
+    expected_names: list[str],
+):
+    titles = [
+        ("Batman Begins", "A hero story"),
+        ("Superman Returns", "A hero story"),
+        ("A_B Movie", "Underscore example"),
+        (r"A\B Movie", "Backslash example"),
+    ]
+
+    for name, description in titles:
+        response = await client.post(
+            "/api/v1/titles",
+            json={
+                "name": name,
+                "description": description,
+                "content_type": "movie",
+                "release_year": 2024,
+                "genre": "Drama",
+                "platform": "Netflix",
+            },
+            headers=auth_headers,
+        )
+        assert response.status_code == 201, response.text
+
+    response = await client.get(
+        "/api/v1/titles/paginated",
+        params={"search": search},
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+
+    assert data["total"] == len(expected_names)
+    assert sorted(title["name"] for title in data["items"]) == sorted(
+        expected_names
+    )
