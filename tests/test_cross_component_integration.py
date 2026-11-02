@@ -36,9 +36,14 @@ from src.services.background_tasks import (
 from src.services.external_provider_service import ExternalProviderError
 
 
-# ---------------------------------------------------------------------------
-# FIXTURES
-# ---------------------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def reset_invalidation_pending_state():
+    """Ensure invalidation pending state does not leak across integration tests."""
+    set_invalidation_pending(False)
+    try:
+        yield
+    finally:
+        set_invalidation_pending(False)
 
 @pytest.fixture
 async def integration_db():

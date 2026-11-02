@@ -8,6 +8,7 @@ from sqlalchemy import text
 
 from src.api.endpoints.auth import router as auth_router
 from src.api.endpoints.titles import router as titles_router
+from src.api.endpoints.voice import router as voice_router
 from src.core.cache import check_redis_health, close_redis_client, init_redis_client
 from src.core.database import engine, settings
 from src.core.http_client import close_http_client, init_http_client
@@ -69,6 +70,7 @@ async def add_security_headers(request, call_next):
 
 app.include_router(titles_router, prefix="/api/v1")
 app.include_router(auth_router, prefix="/api/v1/auth")
+app.include_router(voice_router, prefix="/api/v1")
 
 
 @app.get("/")

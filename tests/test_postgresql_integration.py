@@ -1,6 +1,8 @@
 import asyncio
 import concurrent.futures
 import os
+import socket
+from urllib.parse import urlparse
 import pytest
 from alembic import command
 from alembic.config import Config
@@ -17,9 +19,26 @@ POSTGRES_TEST_URL = os.getenv("POSTGRES_TEST_URL") or make_url(
 ).set(database="ott_test_db").render_as_string(hide_password=False)
 
 
+def is_postgres_available() -> bool:
+    """Check whether the configured PostgreSQL host and port are accepting TCP connections."""
+    try:
+        # Strip asyncpg dialect prefix for standard URL parsing
+        clean_url = POSTGRES_TEST_URL.replace("postgresql+asyncpg://", "postgresql://")
+        parsed = urlparse(clean_url)
+        host = parsed.hostname or "localhost"
+        port = parsed.port or 5432
+        with socket.create_connection((host, port), timeout=1.0):
+            return True
+    except Exception:
+        return False
+
+
 @pytest.fixture(scope="module", autouse=True)
 def ensure_postgres_schema_migrated():
     """Ensure target PostgreSQL test database has Alembic migrations applied before tests run."""
+    if not is_postgres_available():
+        pytest.skip(f"Live PostgreSQL service at {POSTGRES_TEST_URL} is not reachable")
+
     def _run_upgrade():
         alembic_cfg = Config("alembic.ini")
         alembic_cfg.set_section_option(
