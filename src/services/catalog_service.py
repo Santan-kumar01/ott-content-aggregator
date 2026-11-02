@@ -15,6 +15,9 @@ def _build_title_filters(
     filters = []
 
     if search:
+        search = search.strip()
+
+    if search:
         escaped_search = (
             search.replace("\\", "\\\\")
             .replace("%", "\\%")
