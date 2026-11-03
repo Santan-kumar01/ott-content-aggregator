@@ -282,3 +282,32 @@ async def test_transcribe_audio_convenience_function():
         language="en",
         prompt=None,
     )
+
+@pytest.mark.anyio
+async def test_sync_stream_read_failure_raises_invalid_audio_error():
+    """Verify synchronous stream read failures are normalized."""
+    class BrokenStream:
+        def read(self):
+            raise OSError("Stream read failed")
+
+    service = GroqTranscriptionService(api_key="gsk_valid_key")
+
+    with pytest.raises(TranscriptionInvalidAudioError) as exc_info:
+        await service.transcribe(BrokenStream())
+
+    assert "failed to read audio stream" in str(exc_info.value).lower()
+
+
+@pytest.mark.anyio
+async def test_async_stream_read_failure_raises_invalid_audio_error():
+    """Verify asynchronous stream read failures are normalized."""
+    class BrokenAsyncStream:
+        async def read(self):
+            raise OSError("Async stream read failed")
+
+    service = GroqTranscriptionService(api_key="gsk_valid_key")
+
+    with pytest.raises(TranscriptionInvalidAudioError) as exc_info:
+        await service.transcribe(BrokenAsyncStream())
+
+    assert "failed to read audio stream" in str(exc_info.value).lower()

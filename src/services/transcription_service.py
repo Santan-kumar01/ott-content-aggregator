@@ -163,11 +163,16 @@ class GroqTranscriptionService:
 
         # Handle file-like objects or UploadFile
         if hasattr(audio_data, "read"):
-            read_result = audio_data.read()
-            if asyncio.iscoroutine(read_result):
-                content = await read_result
-            else:
-                content = read_result
+            try:
+                read_result = audio_data.read()
+                if asyncio.iscoroutine(read_result):
+                    content = await read_result
+                else:
+                    content = read_result
+            except Exception as exc:
+                raise TranscriptionInvalidAudioError(
+                    f"Failed to read audio stream: {type(exc).__name__}"
+                ) from None
 
             if not content or not isinstance(content, bytes) or len(content) == 0:
                 raise TranscriptionInvalidAudioError("Audio file content is empty.")
