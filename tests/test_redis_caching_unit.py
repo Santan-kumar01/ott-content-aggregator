@@ -541,3 +541,38 @@ async def test_redis_incr_with_expiry_details_rejects_invalid_max_attempts():
         await redis_incr_with_expiry_details(
             "auth:rate:test", 60, max_attempts=-1
         )
+
+
+@pytest.mark.anyio
+async def test_init_redis_client_logs_success(caplog):
+    """Verify successful Redis startup connectivity is logged."""
+    with patch("src.core.cache.get_redis_client") as mock_factory:
+        mock_client = AsyncMock()
+        mock_client.ping.return_value = True
+        mock_factory.return_value = mock_client
+
+        with caplog.at_level("INFO", logger="src.core.cache"):
+            result = await init_redis_client()
+
+        assert result is mock_client
+        mock_client.ping.assert_awaited_once()
+        assert "Connected to Redis cache" in caplog.text
+
+
+@pytest.mark.anyio
+async def test_init_redis_client_handles_unreachable_redis(caplog):
+    """Verify Redis startup failure logs a warning without crashing."""
+    with patch("src.core.cache.get_redis_client") as mock_factory:
+        mock_client = AsyncMock()
+        mock_client.ping.side_effect = RedisConnectionError(
+            "Connection refused"
+        )
+        mock_factory.return_value = mock_client
+
+        with caplog.at_level("WARNING", logger="src.core.cache"):
+            result = await init_redis_client()
+
+        assert result is mock_client
+        mock_client.ping.assert_awaited_once()
+        assert "currently unreachable" in caplog.text
+        assert "bypass cache" in caplog.text.lower() or "bypass" in caplog.text.lower()
