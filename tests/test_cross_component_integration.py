@@ -29,12 +29,20 @@ from src.models.user import User
 from src.schemas.sync import ExternalTitleMetadata
 from src.schemas.title import TitleCreate, TitleUpdate
 from src.services import auth_service, cache_service, catalog_service
+from src.services.outbox_service import process_outbox_batch
 from src.services.background_tasks import (
     get_background_task_status,
     sync_title_from_external_provider_task,
 )
 from src.services.external_provider_service import ExternalProviderError
 
+
+
+async def process_test_outbox(session_factory):
+    """Process pending outbox events using the integration test database."""
+    return await process_outbox_batch(
+        session_factory=session_factory,
+    )
 
 @pytest.fixture(autouse=True)
 def reset_invalidation_pending_state():
@@ -266,7 +274,7 @@ async def test_catalog_crud_caching_and_invalidation_lifecycle(
     integration_client, auth_user_and_headers
 ):
     """Verify authenticated create, get, cache hit, patch invalidation, paginated cache, and delete."""
-    client, _ = integration_client
+    client, session_factory = integration_client
     _, headers, _ = auth_user_and_headers
 
     # 1. Create a title
@@ -284,6 +292,7 @@ async def test_catalog_crud_caching_and_invalidation_lifecycle(
     assert create_res.status_code == 201
     title_data = create_res.json()
     title_id = title_data["id"]
+    await process_test_outbox(session_factory)
 
     # 2. First GET /titles/{id} -> populates cache
     get1 = await client.get(f"/api/v1/titles/{title_id}")
@@ -324,6 +333,7 @@ async def test_catalog_crud_caching_and_invalidation_lifecycle(
     )
     assert patch_res.status_code == 200
     assert patch_res.json()["name"] == "Inception Remastered"
+    await process_test_outbox(session_factory)
 
     # 9. GET /titles/{id} returns updated data immediately
     get_after_patch = await client.get(f"/api/v1/titles/{title_id}")
@@ -333,6 +343,7 @@ async def test_catalog_crud_caching_and_invalidation_lifecycle(
     # 10. DELETE title -> invalidates cache
     del_res = await client.delete(f"/api/v1/titles/{title_id}", headers=headers)
     assert del_res.status_code == 204
+    await process_test_outbox(session_factory)
 
     # 11. Subsequent GET returns 404
     get_after_del = await client.get(f"/api/v1/titles/{title_id}")
@@ -490,13 +501,18 @@ async def test_background_sync_task_with_external_failure_and_db_rollback(
     )
     assert create_res.status_code == 201
     title_id = create_res.json()["id"]
+    await process_test_outbox(session_factory)
 
     # 2. Trigger sync endpoint
-    sync_res = await client.post(
-        f"/api/v1/titles/{title_id}/sync",
-        json={"external_id": "ext-fail-404", "provider": "netflix"},
-        headers=headers,
-    )
+    with patch(
+        "src.api.endpoints.titles.sync_title_from_external_provider_task",
+        new=AsyncMock(),
+    ):
+        sync_res = await client.post(
+            f"/api/v1/titles/{title_id}/sync",
+            json={"external_id": "ext-fail-404", "provider": "netflix"},
+            headers=headers,
+        )
     assert sync_res.status_code == 202
     task_id = sync_res.json()["task_id"]
 
@@ -661,12 +677,17 @@ async def test_background_sync_unexpected_exception_and_db_rollback(
     )
     assert create_res.status_code == 201
     title_id = create_res.json()["id"]
+    await process_test_outbox(session_factory)
 
-    sync_res = await client.post(
-        f"/api/v1/titles/{title_id}/sync",
-        json={"external_id": "crash-test"},
-        headers=headers,
-    )
+    with patch(
+        "src.api.endpoints.titles.sync_title_from_external_provider_task",
+        new=AsyncMock(),
+    ):
+        sync_res = await client.post(
+            f"/api/v1/titles/{title_id}/sync",
+            json={"external_id": "crash-test"},
+            headers=headers,
+        )
     assert sync_res.status_code == 202
     task_id = sync_res.json()["task_id"]
 

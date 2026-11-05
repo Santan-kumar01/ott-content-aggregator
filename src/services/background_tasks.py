@@ -4,7 +4,8 @@ from typing import Any
 
 from src.core.database import SessionLocal
 from src.models.title import Title
-from src.services import cache_service, catalog_service
+from src.services import catalog_service
+from src.services.outbox_service import enqueue_catalog_invalidation
 from src.services.external_provider_service import (
     ExternalProviderError,
     fetch_external_title_metadata,
@@ -63,7 +64,7 @@ async def sync_title_from_external_provider_task(
 
     Opens an isolated PostgreSQL session (never reusing request sessions),
     fetches external metadata via non-blocking HTTP, updates title fields,
-    commits the transaction, and invalidates the Redis catalog cache post-commit.
+    commits the transaction, and relies on the durable outbox worker for post-commit cache invalidation.
     """
     record_task_status(task_id, "in_progress")
     logger.info(
@@ -104,12 +105,14 @@ async def sync_title_from_external_provider_task(
                 title.release_year = metadata.release_year
                 synced_fields.append("release_year")
 
-            # 4. Commit database transaction
+            # 4. Persist metadata changes and invalidation event atomically
+            if synced_fields:
+                enqueue_catalog_invalidation(db, title_id, "external_sync")
+
             await db.commit()
             await db.refresh(title)
 
-            # 5. Invalidate Redis catalog cache only after successful commit
-            await cache_service.invalidate_catalog(title_id=title_id)
+            # 5. Cache invalidation is handled by the durable outbox worker
 
             # 6. Record observable task success
             result_data = {

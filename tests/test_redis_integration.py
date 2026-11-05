@@ -10,6 +10,7 @@ from src.core.cache import check_redis_health, get_redis_client, redis_delete, r
 from src.core.database import Base, get_db
 from src.main import app
 from src.models.title import Title
+from src.services.outbox_service import process_outbox_batch
 from src.services.cache_service import (
     CATALOG_GENERATION_KEY,
     build_catalog_params_hash,
@@ -138,6 +139,7 @@ async def test_real_redis_catalog_cache_hit_and_miss(
     )
     assert create_res.status_code == 201
     title_id = create_res.json()["id"]
+    await process_outbox_batch(session_factory=session_factory)
 
     # 2. First GET request (Cache Miss -> DB query -> Cache Populated in Redis)
     gen = await get_catalog_generation()
@@ -220,7 +222,7 @@ async def test_real_redis_invalidation_on_create_patch_delete(
     redis_auth_headers: dict[str, str],
 ):
     """Verify live Redis invalidation increments generation on create, PATCH, and delete."""
-    client, _ = redis_integration_client
+    client, session_factory = redis_integration_client
 
     # 1. Warm cache with initial listing
     res_init = await client.get("/api/v1/titles")
@@ -242,6 +244,7 @@ async def test_real_redis_invalidation_on_create_patch_delete(
     )
     assert create_res.status_code == 201
     title_id = create_res.json()["id"]
+    await process_outbox_batch(session_factory=session_factory)
 
     gen_after_create = await get_catalog_generation()
     assert gen_after_create > gen_before
@@ -258,6 +261,7 @@ async def test_real_redis_invalidation_on_create_patch_delete(
         headers=redis_auth_headers,
     )
     assert patch_res.status_code == 200
+    await process_outbox_batch(session_factory=session_factory)
     gen_after_patch = await get_catalog_generation()
     assert gen_after_patch > gen_after_create
 
@@ -272,6 +276,7 @@ async def test_real_redis_invalidation_on_create_patch_delete(
         headers=redis_auth_headers,
     )
     assert del_res.status_code == 204
+    await process_outbox_batch(session_factory=session_factory)
     gen_after_delete = await get_catalog_generation()
     assert gen_after_delete > gen_after_patch
 

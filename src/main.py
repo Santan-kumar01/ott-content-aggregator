@@ -1,4 +1,5 @@
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -15,6 +16,8 @@ from src.core.http_client import close_http_client, init_http_client
 from src.core.request_logging import RequestLoggingMiddleware
 from src.models.title import Title  # Registers the model
 from src.models.user import User  # Registers the model
+from src.models.outbox_event import OutboxEvent  # Registers the model
+from src.services.outbox_service import run_outbox_worker
 
 logger = logging.getLogger("src.main")
 
@@ -24,10 +27,31 @@ async def lifespan(app: FastAPI):
     # Initialize shared resources at application startup.
     await init_redis_client()
     await init_http_client()
+
+    stop_event = asyncio.Event()
+    worker_task = asyncio.create_task(
+        run_outbox_worker(stop_event),
+        name="catalog-outbox-worker",
+    )
+    app.state.outbox_worker_task = worker_task
+
     try:
         yield
     finally:
-        # Release shared resources when the application shuts down.
+        # Stop the worker before closing its Redis and database resources.
+        stop_event.set()
+        try:
+            await asyncio.wait_for(worker_task, timeout=10)
+        except asyncio.TimeoutError:
+            logger.warning("Outbox worker shutdown timed out; cancelling it")
+            worker_task.cancel()
+            try:
+                await worker_task
+            except asyncio.CancelledError:
+                pass
+        except asyncio.CancelledError:
+            logger.warning("Outbox worker was cancelled during shutdown")
+
         await close_http_client()
         await close_redis_client()
         await engine.dispose()

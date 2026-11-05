@@ -17,8 +17,9 @@ from src.models.title import Title
 
 
 @pytest.fixture
-async def client():
+async def client(monkeypatch):
     """Create an isolated in-memory SQLite database for testing."""
+    monkeypatch.setattr(settings, "cache_enabled", False)
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
 
     async with engine.begin() as connection:

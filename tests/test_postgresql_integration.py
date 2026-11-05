@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from src.core.database import get_db, settings
 from src.main import app
+from src.services.outbox_service import process_outbox_batch
 
 POSTGRES_TEST_URL = os.getenv("POSTGRES_TEST_URL") or make_url(
     settings.database_url
@@ -260,6 +261,15 @@ async def test_postgres_catalog_crud_and_persistence(
     assert create_res.status_code == 201, create_res.text
     title_id = create_res.json()["id"]
 
+    # Process catalog invalidation before reading through the API.
+    pg_session_factory = async_sessionmaker(
+        pg_engine, class_=AsyncSession, expire_on_commit=False
+    )
+    processed_events = await process_outbox_batch(
+        session_factory=pg_session_factory
+    )
+    assert processed_events >= 1
+
     try:
         # 2. Verify row exists directly in PostgreSQL table via raw SQL
         async with pg_engine.connect() as conn:
@@ -337,7 +347,7 @@ async def test_postgres_alembic_head_and_schema_parity(pg_engine):
         # 1. Verify alembic_version table exists and reports head
         rev_res = await conn.execute(text("SELECT version_num FROM alembic_version"))
         current_rev = rev_res.scalar()
-        assert current_rev == "497ce7b6dfad", f"Expected head 497ce7b6dfad, got {current_rev}"
+        assert current_rev == "20261105_outbox", f"Expected head 20261105_outbox, got {current_rev}"
 
         # 2. Verify tables exist in PostgreSQL
         tab_res = await conn.execute(

@@ -3,6 +3,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.title import Title
+from src.services.outbox_service import enqueue_catalog_invalidation
 from src.schemas.title import TitleCreate, TitleUpdate
 
 
@@ -69,6 +70,8 @@ async def create_title(
     title = Title(**data.model_dump())
     db.add(title)
     try:
+        await db.flush()
+        enqueue_catalog_invalidation(db, title.id, "create")
         await db.commit()
     except Exception:
         await db.rollback()
@@ -156,6 +159,7 @@ async def update_title(
         setattr(title, field, value)
 
     try:
+        enqueue_catalog_invalidation(db, title.id, "update")
         await db.commit()
     except Exception:
         await db.rollback()
@@ -168,6 +172,7 @@ async def delete_title(
     db: AsyncSession,
     title: Title,
 ) -> None:
+    enqueue_catalog_invalidation(db, title.id, "delete")
     await db.delete(title)
     try:
         await db.commit()

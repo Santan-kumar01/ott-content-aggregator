@@ -16,7 +16,7 @@ sys.path.insert(
 )
 
 from src.core.database import Base, settings
-from src.models import Title, User
+from src.models import OutboxEvent, Title, User
 
 # Alembic Config object.
 config = context.config

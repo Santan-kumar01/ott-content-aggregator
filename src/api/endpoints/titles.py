@@ -55,7 +55,6 @@ async def create_title(
     current_user: CurrentUser,
 ):
     title = await catalog_service.create_title(db, data)
-    await cache_service.invalidate_catalog()
     return title
 
 
@@ -241,7 +240,6 @@ async def update_title(
         )
 
     updated_title = await catalog_service.update_title(db, title, data)
-    await cache_service.invalidate_catalog(title_id=title_id)
     return updated_title
 
 
@@ -268,7 +266,6 @@ async def delete_title(
         )
 
     await catalog_service.delete_title(db, title)
-    await cache_service.invalidate_catalog(title_id=title_id)
 
 
 @router.post(
