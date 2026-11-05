@@ -7,14 +7,15 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from src.core.database import Base, get_db
+from src.core.database import Base, get_db, settings
 from src.main import app
 from src.models.title import Title
 
 
 @pytest.fixture
-async def client():
+async def client(monkeypatch):
     """Create an isolated in-memory SQLite database for testing."""
+    monkeypatch.setattr(settings, "cache_enabled", False)
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
 
     async with engine.begin() as connection:

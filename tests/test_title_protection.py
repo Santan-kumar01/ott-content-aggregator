@@ -4,7 +4,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from src.core.database import Base, get_db
+from src.core.database import Base, get_db, settings
 from src.core.security import create_access_token, hash_password
 from src.main import app
 from src.models.title import Title
@@ -12,8 +12,9 @@ from src.models.user import User
 
 
 @pytest.fixture
-async def client():
+async def client(monkeypatch):
     """Create an async test client with an in-memory SQLite database."""
+    monkeypatch.setattr(settings, "cache_enabled", False)
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
