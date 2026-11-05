@@ -23,10 +23,31 @@ def test_app_import_and_openapi_generation_without_db():
 
 @pytest.mark.anyio
 async def test_lifespan_startup_and_shutdown_without_live_db():
-    """Verify lifespan context starts and exits cleanly without attempting DB connection."""
-    async with lifespan(app):
-        # App is in running state
-        assert app.title == "OTT Content Aggregator API"
+    """Verify lifespan starts and shuts down without a live database."""
+    from unittest.mock import AsyncMock, patch
+
+    worker_started = asyncio.Event()
+    worker_stopped = asyncio.Event()
+
+    async def fake_worker(stop_event):
+        worker_started.set()
+        await stop_event.wait()
+        worker_stopped.set()
+
+    with patch("src.main.init_redis_client", new=AsyncMock()):
+        with patch("src.main.init_http_client", new=AsyncMock()):
+            with patch("src.main.run_outbox_worker", new=fake_worker):
+                with patch("src.main.close_http_client", new=AsyncMock()):
+                    with patch("src.main.close_redis_client", new=AsyncMock()):
+                        with patch("src.main.engine") as mock_engine:
+                            mock_engine.dispose = AsyncMock()
+
+                            async with lifespan(app):
+                                assert app.title == "OTT Content Aggregator API"
+                                await worker_started.wait()
+
+                            assert worker_stopped.is_set()
+                            mock_engine.dispose.assert_awaited_once()
 
 
 def test_alembic_metadata_registration():
@@ -34,6 +55,7 @@ def test_alembic_metadata_registration():
     table_names = set(Base.metadata.tables.keys())
     assert "users" in table_names
     assert "titles" in table_names
+    assert "outbox_events" in table_names
 
 
 def test_migration_lifecycle_isolated_db():
@@ -56,6 +78,24 @@ def test_migration_lifecycle_isolated_db():
         assert "alembic_version" in created_tables
         assert "users" in created_tables
         assert "titles" in created_tables
+        assert "outbox_events" in created_tables
+
+        outbox_columns = {
+            column["name"]
+            for column in inspector.get_columns("outbox_events")
+        }
+        assert {
+            "id", "event_type", "payload", "status", "attempts",
+            "last_error", "created_at", "locked_at",
+            "processed_at", "lock_token",
+        }.issubset(outbox_columns)
+
+        outbox_indexes = {
+            index["name"]
+            for index in inspector.get_indexes("outbox_events")
+        }
+        assert "ix_outbox_events_event_type" in outbox_indexes
+        assert "ix_outbox_events_status" in outbox_indexes
 
         # Check users columns and indexes
         user_columns = {c["name"] for c in inspector.get_columns("users")}
@@ -84,6 +124,7 @@ def test_migration_lifecycle_isolated_db():
         tables_after_downgrade = set(inspector2.get_table_names())
         assert "users" not in tables_after_downgrade
         assert "titles" not in tables_after_downgrade
+        assert "outbox_events" not in tables_after_downgrade
 
         sync_engine2.dispose()
 
@@ -93,6 +134,7 @@ def test_migration_lifecycle_isolated_db():
         inspector3 = inspect(sync_engine3)
         assert "users" in set(inspector3.get_table_names())
         assert "titles" in set(inspector3.get_table_names())
+        assert "outbox_events" in set(inspector3.get_table_names())
         sync_engine3.dispose()
 
 

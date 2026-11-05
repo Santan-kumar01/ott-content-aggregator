@@ -405,8 +405,27 @@ async def test_background_sync_task_execution_updates_db_and_invalidates_cache(
                 assert task_status["result"]["title_id"] == title_id
                 assert "description" in task_status["result"]["synced_fields"]
 
-                # Verify cache invalidation was triggered post-commit
-                mock_inval.assert_awaited_once_with(title_id=title_id)
+                # Cache invalidation is now handled by the durable outbox worker.
+                mock_inval.assert_not_awaited()
+
+    # Verify the transaction persisted the catalog invalidation event.
+    from sqlalchemy import select
+    from src.models.outbox_event import OutboxEvent
+
+    async with session_factory() as session:
+        result = await session.scalars(
+            select(OutboxEvent).where(
+                OutboxEvent.event_type == "catalog.invalidate"
+            )
+        )
+        events = list(result.all())
+
+        assert len(events) == 1
+        assert events[0].payload == {
+            "title_id": title_id,
+            "operation": "external_sync",
+        }
+        assert events[0].status == "pending"
 
     # 3. Verify PostgreSQL title record was actually updated
     async with session_factory() as session:
