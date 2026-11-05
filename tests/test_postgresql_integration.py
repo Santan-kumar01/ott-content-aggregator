@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from src.core.database import get_db, settings
 from src.main import app
+from src.services.outbox_service import process_outbox_batch
 
 POSTGRES_TEST_URL = os.getenv("POSTGRES_TEST_URL") or make_url(
     settings.database_url
@@ -259,6 +260,15 @@ async def test_postgres_catalog_crud_and_persistence(
     )
     assert create_res.status_code == 201, create_res.text
     title_id = create_res.json()["id"]
+
+    # Process catalog invalidation before reading through the API.
+    pg_session_factory = async_sessionmaker(
+        pg_engine, class_=AsyncSession, expire_on_commit=False
+    )
+    processed_events = await process_outbox_batch(
+        session_factory=pg_session_factory
+    )
+    assert processed_events >= 1
 
     try:
         # 2. Verify row exists directly in PostgreSQL table via raw SQL
