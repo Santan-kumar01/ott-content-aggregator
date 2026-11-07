@@ -24,6 +24,7 @@ export interface RequestOptions extends Omit<RequestInit, "body"> {
   body?: unknown;
   params?: Record<string, string | number | boolean | undefined | null>;
   token?: string | null;
+  timeoutMs?: number;
 }
 
 /**
@@ -79,11 +80,21 @@ export async function apiRequest<T>(
     }
   }
 
-  const response = await fetch(url, {
-    ...customConfig,
-    headers: requestHeaders,
-    body: requestBody,
-  });
+  const timeoutMs = options.timeoutMs ?? 2000;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...customConfig,
+      signal: customConfig.signal || controller.signal,
+      headers: requestHeaders,
+      body: requestBody,
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
   if (!response.ok) {
     let errorDetail = `Request failed with status ${response.status}`;

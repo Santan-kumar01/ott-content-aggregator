@@ -12,6 +12,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { getVerifiedPoster } from "@/lib/imdb";
 import type { Platform, ContentType } from "@/types";
 
 export interface MovieCardProps {
@@ -93,6 +94,7 @@ const genreGradients: Record<string, string> = {
   Comedy: "from-amber-950 via-stone-900 to-yellow-950",
   Adventure: "from-cyan-950 via-slate-900 to-emerald-950",
   Crime: "from-slate-950 via-zinc-900 to-neutral-950",
+  Animation: "from-violet-950 via-purple-900 to-indigo-950",
 };
 
 export function MovieCard({
@@ -102,13 +104,17 @@ export function MovieCard({
   genre,
   platform,
   contentType = "movie",
-  rating = 8.4,
+  rating,
   description,
   posterUrl,
   featured = false,
   className,
 }: MovieCardProps) {
   const [imageError, setImageError] = useState(false);
+
+  // Fallback to verified IMDb poster if not directly passed
+  const effectivePoster =
+    posterUrl || getVerifiedPoster(title, releaseYear) || null;
 
   const platformStyle = platformColors[platform] || {
     bg: "bg-purple-600/90",
@@ -125,20 +131,24 @@ export function MovieCard({
       data-title-id={id}
       className={cn(
         "group relative flex flex-col rounded-2xl overflow-hidden",
-        "bg-zinc-900/80 border border-white/10 hover:border-purple-500/40",
+        "bg-zinc-900/80 border border-white/10 hover:border-purple-500/50",
         "transition-all duration-300 ease-out",
         "hover:-translate-y-1.5 hover:shadow-2xl hover:shadow-purple-950/40",
-        featured && "ring-1 ring-purple-500/30",
+        featured && "ring-1 ring-purple-500/40",
         className
       )}
     >
-      {/* Aspect Ratio 2:3 Container */}
-      <div className="relative aspect-[2/3] w-full overflow-hidden bg-zinc-950">
-        {posterUrl && !imageError ? (
+      {/* Clickable Card Area leading to details */}
+      <Link
+        href={`/titles/${id}`}
+        className="block relative aspect-[2/3] w-full overflow-hidden bg-zinc-950 focus:outline-none"
+      >
+        {effectivePoster && !imageError ? (
           <Image
-            src={posterUrl}
+            src={effectivePoster}
             alt={title}
             fill
+            unoptimized
             sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 20vw"
             className="object-cover object-center transition-transform duration-500 ease-out group-hover:scale-105"
             onError={() => setImageError(true)}
@@ -200,7 +210,7 @@ export function MovieCard({
             {platform}
           </span>
 
-          {rating && (
+          {typeof rating === "number" && rating > 0 && (
             <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-black/75 border border-white/15 text-amber-300 backdrop-blur-md">
               <Star className="size-3 fill-amber-400 text-amber-400" />
               <span>{rating.toFixed(1)}</span>
@@ -209,22 +219,18 @@ export function MovieCard({
         </div>
 
         {/* Hover Action Overlay */}
-        <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-4 z-20">
+        <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-4 z-20">
           <div className="flex items-center gap-2 mb-2">
-            <Link
-              href={`/discover?search=${encodeURIComponent(title)}`}
-              className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold shadow-lg shadow-purple-600/30 transition-colors"
-            >
+            <span className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold shadow-lg shadow-purple-600/30 transition-colors">
               <Play className="size-3.5 fill-current" />
-              <span>Watch Now</span>
-            </Link>
-            <Link
-              href={`/discover?search=${encodeURIComponent(title)}`}
+              <span>View Details</span>
+            </span>
+            <span
               className="p-2 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 text-white transition-colors"
               title="Details"
             >
               <Info className="size-4" />
-            </Link>
+            </span>
           </div>
           {description && (
             <p className="text-[11px] text-zinc-300 line-clamp-2 leading-relaxed">
@@ -232,10 +238,10 @@ export function MovieCard({
             </p>
           )}
         </div>
-      </div>
+      </Link>
 
       {/* Card Metadata Footer */}
-      <div className="p-3.5 flex flex-col justify-between flex-1 bg-zinc-900/60 backdrop-blur-sm border-t border-white/5">
+      <div className="p-3.5 flex flex-col justify-between flex-1 bg-zinc-900/70 backdrop-blur-sm border-t border-white/5">
         <div>
           <div className="flex items-center justify-between gap-2 text-[11px] text-zinc-400 mb-1">
             <span className="font-medium text-zinc-300">{genre}</span>
@@ -244,15 +250,16 @@ export function MovieCard({
             </span>
           </div>
 
-          <h4
-            className="text-sm font-semibold text-white tracking-tight line-clamp-1 group-hover:text-purple-300 transition-colors"
-            title={title}
-          >
-            {title}
-          </h4>
+          <Link href={`/titles/${id}`} className="group-hover:text-purple-300 transition-colors">
+            <h4
+              className="text-sm font-semibold text-white tracking-tight line-clamp-1"
+              title={title}
+            >
+              {title}
+            </h4>
+          </Link>
         </div>
       </div>
     </div>
   );
 }
-

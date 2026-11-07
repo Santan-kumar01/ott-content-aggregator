@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, Suspense } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -22,8 +22,101 @@ const NAV_LINKS = [
   { label: "Features", href: "/#features" },
 ];
 
-export function Navbar() {
+function DesktopNavLinks() {
   const pathname = usePathname();
+
+  return (
+    <nav className="hidden md:flex items-center gap-1 lg:gap-2">
+      {NAV_LINKS.map((link) => {
+        const isActive =
+          link.href === "/"
+            ? pathname === "/"
+            : pathname?.startsWith(link.href);
+
+        return (
+          <Link
+            key={link.label}
+            href={link.href}
+            className={cn(
+              "px-3 py-1.5 rounded-lg text-sm font-medium transition-colors",
+              isActive
+                ? "text-white bg-white/10"
+                : "text-zinc-400 hover:text-white hover:bg-white/5"
+            )}
+          >
+            {link.label}
+          </Link>
+        );
+      })}
+    </nav>
+  );
+}
+
+function MobileNavLinks({ onNavigate }: { onNavigate: () => void }) {
+  const pathname = usePathname();
+
+  return (
+    <nav className="flex flex-col space-y-1">
+      {NAV_LINKS.map((link) => {
+        const isActive =
+          link.href === "/"
+            ? pathname === "/"
+            : pathname?.startsWith(link.href);
+
+        return (
+          <Link
+            key={link.label}
+            href={link.href}
+            onClick={onNavigate}
+            className={cn(
+              "px-3 py-2 rounded-lg text-sm font-medium transition-colors",
+              isActive
+                ? "text-white bg-white/10 font-semibold"
+                : "text-zinc-300 hover:text-white hover:bg-white/5"
+            )}
+          >
+            {link.label}
+          </Link>
+        );
+      })}
+    </nav>
+  );
+}
+
+function FallbackDesktopNavLinks() {
+  return (
+    <nav className="hidden md:flex items-center gap-1 lg:gap-2">
+      {NAV_LINKS.map((link) => (
+        <Link
+          key={link.label}
+          href={link.href}
+          className="px-3 py-1.5 rounded-lg text-sm font-medium text-zinc-400 hover:text-white hover:bg-white/5 transition-colors"
+        >
+          {link.label}
+        </Link>
+      ))}
+    </nav>
+  );
+}
+
+function FallbackMobileNavLinks({ onNavigate }: { onNavigate: () => void }) {
+  return (
+    <nav className="flex flex-col space-y-1">
+      {NAV_LINKS.map((link) => (
+        <Link
+          key={link.label}
+          href={link.href}
+          onClick={onNavigate}
+          className="px-3 py-2 rounded-lg text-sm font-medium text-zinc-300 hover:text-white hover:bg-white/5 transition-colors"
+        >
+          {link.label}
+        </Link>
+      ))}
+    </nav>
+  );
+}
+
+export function Navbar() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
 
@@ -69,30 +162,10 @@ export function Navbar() {
             </div>
           </Link>
 
-          {/* Desktop Navigation Links */}
-          <nav className="hidden md:flex items-center gap-1 lg:gap-2">
-            {NAV_LINKS.map((link) => {
-              const isActive =
-                link.href === "/"
-                  ? pathname === "/"
-                  : pathname?.startsWith(link.href);
-
-              return (
-                <Link
-                  key={link.label}
-                  href={link.href}
-                  className={cn(
-                    "px-3 py-1.5 rounded-lg text-sm font-medium transition-colors",
-                    isActive
-                      ? "text-white bg-white/10"
-                      : "text-zinc-400 hover:text-white hover:bg-white/5"
-                  )}
-                >
-                  {link.label}
-                </Link>
-              );
-            })}
-          </nav>
+          {/* Desktop Navigation Links wrapped in Suspense */}
+          <Suspense fallback={<FallbackDesktopNavLinks />}>
+            <DesktopNavLinks />
+          </Suspense>
 
           {/* Desktop Right Actions */}
           <div className="hidden md:flex items-center gap-3">
@@ -154,18 +227,9 @@ export function Navbar() {
       {/* Mobile Drawer */}
       {mobileMenuOpen && (
         <div className="md:hidden border-b border-white/10 bg-zinc-950/95 backdrop-blur-2xl px-4 pt-3 pb-6 space-y-3">
-          <nav className="flex flex-col space-y-1">
-            {NAV_LINKS.map((link) => (
-              <Link
-                key={link.label}
-                href={link.href}
-                onClick={() => setMobileMenuOpen(false)}
-                className="px-3 py-2 rounded-lg text-sm font-medium text-zinc-300 hover:text-white hover:bg-white/5 transition-colors"
-              >
-                {link.label}
-              </Link>
-            ))}
-          </nav>
+          <Suspense fallback={<FallbackMobileNavLinks onNavigate={() => setMobileMenuOpen(false)} />}>
+            <MobileNavLinks onNavigate={() => setMobileMenuOpen(false)} />
+          </Suspense>
 
           <div className="pt-3 border-t border-white/10 flex flex-col gap-2">
             <Link
@@ -191,4 +255,3 @@ export function Navbar() {
     </header>
   );
 }
-
