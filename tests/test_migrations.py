@@ -365,7 +365,7 @@ def test_downgrade_preserves_data_and_blocks_accidental_drop(tmp_path: Path, mon
 
     # Attempt downgrade without ALLOW_DESTRUCTIVE_DOWNGRADE
     with pytest.raises(RuntimeError) as exc_info:
-        command.downgrade(cfg, "-2")
+        command.downgrade(cfg, "0002")
 
     assert "Downgrade aborted: Table 'users' contains data." in str(exc_info.value)
     assert "Refusing to drop table during rollback to prevent accidental data loss" in str(exc_info.value)
@@ -470,7 +470,7 @@ def test_downgrade_preserves_title_data_and_blocks_accidental_drop(
         sync_engine.dispose()
 
     with pytest.raises(RuntimeError) as exc_info:
-        command.downgrade(cfg, "-2")
+        command.downgrade(cfg, "0002")
 
     assert "Downgrade aborted: Table 'titles' contains data." in str(
         exc_info.value

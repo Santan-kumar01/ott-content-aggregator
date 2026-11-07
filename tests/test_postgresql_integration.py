@@ -347,7 +347,7 @@ async def test_postgres_alembic_head_and_schema_parity(pg_engine):
         # 1. Verify alembic_version table exists and reports head
         rev_res = await conn.execute(text("SELECT version_num FROM alembic_version"))
         current_rev = rev_res.scalar()
-        assert current_rev == "20261105_outbox", f"Expected head 20261105_outbox, got {current_rev}"
+        assert current_rev == "20261107_trgm", f"Expected head 20261107_trgm, got {current_rev}"
 
         # 2. Verify tables exist in PostgreSQL
         tab_res = await conn.execute(
