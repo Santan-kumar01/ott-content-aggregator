@@ -13,6 +13,8 @@ import {
   fetchPaginatedTitles,
   type EnrichedTitle,
 } from "@/lib/services/catalog";
+import { VoiceSearchModal } from "@/components/voice/VoiceSearchModal";
+import type { ParsedVoiceQuery } from "@/types";
 import { Sparkles, Layers, SlidersHorizontal } from "lucide-react";
 
 const PAGE_SIZE = 12;
@@ -56,6 +58,9 @@ function DiscoverContent() {
   const [showFiltersMobile, setShowFiltersMobile] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const [isFallbackMode, setIsFallbackMode] = useState(false);
+  const [isVoiceModalOpen, setIsVoiceModalOpen] = useState(
+    searchParams.get("voice") === "true"
+  );
 
   // Sync state to URL search parameters
   const updateUrlParams = useCallback(
@@ -186,6 +191,27 @@ function DiscoverContent() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
+  const handleApplyVoiceResults = (
+    voiceQuery: string,
+    parsed: ParsedVoiceQuery
+  ) => {
+    setIsLoading(true);
+
+    const newSearch = parsed.cleaned_query || voiceQuery || search;
+    const newFilters: FilterState = {
+      ...filters,
+      genre: parsed.genre || filters.genre,
+      platform: parsed.platform || filters.platform,
+      releaseYear: parsed.release_year ?? filters.releaseYear,
+      contentType: parsed.content_type || filters.contentType,
+    };
+
+    setSearch(newSearch);
+    setFilters(newFilters);
+    setCurrentPage(1);
+    updateUrlParams(newSearch, newFilters, sortBy, sortOrder, 1);
+  };
+
   return (
     <div className="min-h-screen bg-[#07070a] text-zinc-100 flex flex-col selection:bg-purple-600 selection:text-white">
       <Navbar />
@@ -220,6 +246,7 @@ function DiscoverContent() {
           <SearchBar
             value={search}
             onChange={handleSearchChange}
+            onVoiceClick={() => setIsVoiceModalOpen(true)}
             isLoading={isLoading}
             placeholder="Search titles by name, synopsis, or keywords..."
           />
@@ -324,6 +351,13 @@ function DiscoverContent() {
             )}
           </div>
         </div>
+
+        {/* Voice Assisted Search Modal */}
+        <VoiceSearchModal
+          isOpen={isVoiceModalOpen}
+          onClose={() => setIsVoiceModalOpen(false)}
+          onApplyResults={handleApplyVoiceResults}
+        />
       </main>
 
       <Footer />

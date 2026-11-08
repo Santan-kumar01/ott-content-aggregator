@@ -6,7 +6,6 @@ import Link from "next/link";
 import {
   ArrowLeft,
   Star,
-  Play,
   Film,
   Tv,
   Calendar,
@@ -14,7 +13,6 @@ import {
   Bookmark,
   Check,
   ExternalLink,
-  Sparkles,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { MovieCard } from "./MovieCard";

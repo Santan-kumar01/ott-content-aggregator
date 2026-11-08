@@ -74,13 +74,23 @@ export async function apiRequest<T>(
     if (body instanceof FormData) {
       requestBody = body;
       // When body is FormData, browser sets multipart/form-data with proper boundary
+    } else if (body instanceof URLSearchParams) {
+      requestHeaders["Content-Type"] = "application/x-www-form-urlencoded";
+      requestBody = body.toString();
+    } else if (typeof body === "string") {
+      requestBody = body;
+      if (!requestHeaders["Content-Type"]) {
+        requestHeaders["Content-Type"] = "text/plain";
+      }
     } else {
-      requestHeaders["Content-Type"] = "application/json";
+      if (!requestHeaders["Content-Type"]) {
+        requestHeaders["Content-Type"] = "application/json";
+      }
       requestBody = JSON.stringify(body);
     }
   }
 
-  const timeoutMs = options.timeoutMs ?? 2000;
+  const timeoutMs = options.timeoutMs ?? 10000;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 

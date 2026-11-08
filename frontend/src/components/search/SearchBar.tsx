@@ -1,12 +1,13 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
-import { Search, X, Loader2 } from "lucide-react";
+import { Search, X, Loader2, Mic } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface SearchBarProps {
   value: string;
   onChange: (value: string) => void;
+  onVoiceClick?: () => void;
   placeholder?: string;
   isLoading?: boolean;
   className?: string;
@@ -15,6 +16,7 @@ interface SearchBarProps {
 export function SearchBar({
   value,
   onChange,
+  onVoiceClick,
   placeholder = "Search movies, series, genres, or keywords...",
   isLoading = false,
   className,
@@ -74,19 +76,37 @@ export function SearchBar({
         onKeyDown={handleKeyDown}
         placeholder={placeholder}
         aria-label="Search titles"
-        className="w-full bg-transparent pl-12 pr-12 py-3.5 sm:py-4 text-sm sm:text-base text-white placeholder-zinc-500 focus:outline-none"
+        className={cn(
+          "w-full bg-transparent pl-12 py-3.5 sm:py-4 text-sm sm:text-base text-white placeholder-zinc-500 focus:outline-none",
+          onVoiceClick ? "pr-24" : "pr-12"
+        )}
       />
 
-      {internalValue && (
-        <button
-          type="button"
-          onClick={handleClear}
-          aria-label="Clear search input"
-          className="absolute right-4 p-1 rounded-lg text-zinc-400 hover:text-white hover:bg-white/10 transition-colors focus:outline-none"
-        >
-          <X className="size-4" />
-        </button>
-      )}
+      <div className="absolute right-3.5 flex items-center gap-1.5">
+        {internalValue && (
+          <button
+            type="button"
+            onClick={handleClear}
+            aria-label="Clear search input"
+            className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-white/10 transition-colors focus:outline-none cursor-pointer"
+          >
+            <X className="size-4" />
+          </button>
+        )}
+
+        {onVoiceClick && (
+          <button
+            type="button"
+            onClick={onVoiceClick}
+            aria-label="Search with voice"
+            title="Voice Search"
+            className="p-1.5 rounded-xl bg-purple-500/15 hover:bg-purple-500/25 text-purple-300 hover:text-white border border-purple-500/30 transition-all cursor-pointer flex items-center gap-1 text-xs font-semibold px-2"
+          >
+            <Mic className="size-3.5 text-purple-400" />
+            <span className="hidden sm:inline">Voice</span>
+          </button>
+        )}
+      </div>
     </div>
   );
 }
