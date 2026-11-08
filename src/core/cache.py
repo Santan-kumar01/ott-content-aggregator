@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import re
+import uuid
 from typing import Any
 
 import redis.asyncio as aioredis
@@ -345,3 +346,74 @@ async def redis_incr_with_expiry(key: str, ttl_seconds: int) -> int | None:
             _redis_client = None
             _client_loop = None
         return None
+
+# Distributed cache lock operations
+
+async def redis_acquire_lock(
+    key: str,
+    ttl_seconds: int = 10,
+) -> str | None:
+    """Acquire a distributed Redis lock and return its unique token."""
+    global _redis_client, _client_loop
+
+    if ttl_seconds <= 0:
+        raise ValueError("ttl_seconds must be greater than zero")
+
+    client = get_redis_client()
+    if client is None:
+        return None
+
+    token = uuid.uuid4().hex
+
+    try:
+        acquired = await client.set(
+            key,
+            token,
+            nx=True,
+            ex=ttl_seconds,
+        )
+        return token if acquired else None
+    except (
+        RedisError,
+        asyncio.TimeoutError,
+        ConnectionError,
+        OSError,
+        RuntimeError,
+    ) as exc:
+        logger.warning("Redis lock acquisition failed: %s", exc)
+        if isinstance(exc, RuntimeError):
+            _redis_client = None
+            _client_loop = None
+        return None
+
+
+async def redis_release_lock(key: str, token: str) -> bool:
+    """Release a lock only when its stored token matches the owner."""
+    global _redis_client, _client_loop
+
+    client = get_redis_client()
+    if client is None:
+        return False
+
+    script = """
+    if redis.call('GET', KEYS[1]) == ARGV[1] then
+        return redis.call('DEL', KEYS[1])
+    end
+    return 0
+    """
+
+    try:
+        result = await client.eval(script, 1, key, token)
+        return bool(result)
+    except (
+        RedisError,
+        asyncio.TimeoutError,
+        ConnectionError,
+        OSError,
+        RuntimeError,
+    ) as exc:
+        logger.warning("Redis lock release failed: %s", exc)
+        if isinstance(exc, RuntimeError):
+            _redis_client = None
+            _client_loop = None
+        return False

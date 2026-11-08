@@ -111,17 +111,19 @@ async def list_titles(
     params = _title_query_parameters(
         genre, platform, search, release_year, sort_by, sort_order, skip, limit
     )
-    cached = await cache_service.get_catalog_list(**params)
-    if cached is not None:
-        return cached
+    async def load_titles():
+        titles = await catalog_service.list_titles(db, **params)
+        return [
+            TitleRead.model_validate(title).model_dump(mode="json")
+            for title in titles
+        ]
 
-    titles = await catalog_service.list_titles(db, **params)
-    serialized = [
-        TitleRead.model_validate(title).model_dump(mode="json")
-        for title in titles
-    ]
-    await cache_service.set_catalog_list(data=serialized, **params)
-    return titles
+    return await cache_service.get_or_load_with_lock(
+        lock_key=f"lock:catalog:list:{cache_service.build_catalog_params_hash(**params)}",
+        cache_getter=lambda: cache_service.get_catalog_list(**params),
+        loader=load_titles,
+        cache_setter=lambda data: cache_service.set_catalog_list(data=data, **params),
+    )
 
 
 @router.get(
@@ -155,23 +157,27 @@ async def list_titles_paginated(
     params = _title_query_parameters(
         genre, platform, search, release_year, sort_by, sort_order, skip, limit
     )
-    cached = await cache_service.get_catalog_paginated(**params)
-    if cached is not None:
-        return cached
+    async def load_paginated():
+        items, total = await catalog_service.list_titles_paginated(db, **params)
+        return {
+            "items": [
+                TitleRead.model_validate(item).model_dump(mode="json")
+                for item in items
+            ],
+            "total": total,
+            "skip": skip,
+            "limit": limit,
+            "has_next": skip + len(items) < total,
+        }
 
-    items, total = await catalog_service.list_titles_paginated(db, **params)
-    response_payload = {
-        "items": [
-            TitleRead.model_validate(item).model_dump(mode="json")
-            for item in items
-        ],
-        "total": total,
-        "skip": skip,
-        "limit": limit,
-        "has_next": skip + len(items) < total,
-    }
-    await cache_service.set_catalog_paginated(data=response_payload, **params)
-    return response_payload
+    return await cache_service.get_or_load_with_lock(
+        lock_key=f"lock:catalog:paginated:{cache_service.build_catalog_params_hash(**params)}",
+        cache_getter=lambda: cache_service.get_catalog_paginated(**params),
+        loader=load_paginated,
+        cache_setter=lambda data: cache_service.set_catalog_paginated(
+            data=data, **params
+        ),
+    )
 
 
 @router.get(
@@ -200,20 +206,21 @@ async def get_title(
     title_id: Annotated[int, Path(gt=0)],
     db: DBSession,
 ):
-    cached = await cache_service.get_title(title_id)
-    if cached is not None:
-        return cached
+    async def load_title():
+        title = await catalog_service.get_title(db, title_id)
+        if title is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Title not found",
+            )
+        return TitleRead.model_validate(title).model_dump(mode="json")
 
-    title = await catalog_service.get_title(db, title_id)
-    if title is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Title not found",
-        )
-
-    serialized = TitleRead.model_validate(title).model_dump(mode="json")
-    await cache_service.set_title(title_id, serialized)
-    return title
+    return await cache_service.get_or_load_with_lock(
+        lock_key=f"lock:catalog:title:{title_id}",
+        cache_getter=lambda: cache_service.get_title(title_id),
+        loader=load_title,
+        cache_setter=lambda data: cache_service.set_title(title_id, data),
+    )
 
 
 @router.patch(

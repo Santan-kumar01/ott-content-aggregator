@@ -1,13 +1,16 @@
+import asyncio
 import hashlib
 import json
 import logging
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from src.core.cache import (
     is_invalidation_pending,
+    redis_acquire_lock,
     redis_delete,
     redis_get,
     redis_incr,
+    redis_release_lock,
     redis_set,
     set_invalidation_pending,
 )
@@ -308,3 +311,55 @@ async def invalidate_catalog(title_id: int | None = None) -> bool:
     set_invalidation_pending(False)
     logger.info("Catalog cache successfully invalidated (generation: %d)", new_gen)
     return True
+
+
+async def get_or_load_with_lock(
+    *,
+    lock_key: str,
+    cache_getter: Callable[[], Awaitable[Any | None]],
+    loader: Callable[[], Awaitable[Any]],
+    cache_setter: Callable[[Any], Awaitable[bool]],
+    wait_timeout: float = 1.0,
+    poll_interval: float = 0.1,
+) -> Any:
+    """Load data once under a Redis lock, with bounded follower waiting.
+
+    If Redis is unavailable or another owner holds the lock, wait briefly
+    for the cache to populate before falling back to the database loader.
+    """
+    if wait_timeout < 0 or poll_interval <= 0:
+        raise ValueError("Invalid cache lock wait configuration")
+
+    cached = await cache_getter()
+    if cached is not None:
+        return cached
+
+    token = await redis_acquire_lock(lock_key, ttl_seconds=10)
+
+    if token is not None:
+        try:
+            # Another request may have populated the cache before lock acquisition.
+            cached = await cache_getter()
+            if cached is not None:
+                return cached
+
+            data = await loader()
+            if data is not None:
+                await cache_setter(data)
+            return data
+        finally:
+            await redis_release_lock(lock_key, token)
+
+    # Follower path or Redis-unavailable fallback.
+    deadline = asyncio.get_running_loop().time() + wait_timeout
+
+    while asyncio.get_running_loop().time() < deadline:
+        await asyncio.sleep(poll_interval)
+        cached = await cache_getter()
+        if cached is not None:
+            return cached
+
+    data = await loader()
+    if data is not None:
+        await cache_setter(data)
+    return data
