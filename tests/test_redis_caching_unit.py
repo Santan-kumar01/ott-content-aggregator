@@ -13,11 +13,13 @@ from src.core.cache import (
     get_redis_client,
     init_redis_client,
     is_invalidation_pending,
+    redis_acquire_lock,
     redis_delete,
     redis_get,
     redis_incr,
     redis_incr_with_expiry,
     redis_incr_with_expiry_details,
+    redis_release_lock,
     redis_set,
     sanitize_redis_url,
     set_invalidation_pending,
@@ -576,3 +578,65 @@ async def test_init_redis_client_handles_unreachable_redis(caplog):
         mock_client.ping.assert_awaited_once()
         assert "currently unreachable" in caplog.text
         assert "bypass cache" in caplog.text.lower() or "bypass" in caplog.text.lower()
+
+
+# ===========================================================================
+# DISTRIBUTED REDIS LOCK TESTS
+# ===========================================================================
+
+@pytest.mark.anyio
+async def test_redis_lock_acquisition_success():
+    mock_client = AsyncMock()
+    mock_client.set.return_value = True
+
+    with patch("src.core.cache.get_redis_client", return_value=mock_client):
+        from src.core.cache import redis_acquire_lock
+
+        token = await redis_acquire_lock("test:lock", ttl_seconds=10)
+
+    assert token is not None
+    assert len(token) == 32
+    mock_client.set.assert_awaited_once_with(
+        "test:lock",
+        token,
+        nx=True,
+        ex=10,
+    )
+
+
+@pytest.mark.anyio
+async def test_redis_lock_acquisition_fails_when_already_locked():
+    mock_client = AsyncMock()
+    mock_client.set.return_value = None
+
+    with patch("src.core.cache.get_redis_client", return_value=mock_client):
+        token = await redis_acquire_lock("test:lock")
+
+    assert token is None
+    mock_client.set.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_redis_lock_release_success():
+    mock_client = AsyncMock()
+    mock_client.eval.return_value = 1
+
+    with patch("src.core.cache.get_redis_client", return_value=mock_client):
+        released = await redis_release_lock("test:lock", "owner-token")
+
+    assert released is True
+    mock_client.eval.assert_awaited_once()
+    args = mock_client.eval.await_args.args
+    assert args[1:] == (1, "test:lock", "owner-token")
+
+
+@pytest.mark.anyio
+async def test_redis_lock_release_rejects_wrong_owner():
+    mock_client = AsyncMock()
+    mock_client.eval.return_value = 0
+
+    with patch("src.core.cache.get_redis_client", return_value=mock_client):
+        released = await redis_release_lock("test:lock", "wrong-token")
+
+    assert released is False
+    mock_client.eval.assert_awaited_once()
