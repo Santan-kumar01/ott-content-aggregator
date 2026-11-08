@@ -14,9 +14,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "OTT Content Aggregator",
+  title: "CineSync OTT — Unified Streaming Platform & Voice Discovery",
   description:
-    "Unified streaming platform search, catalogue exploration, and voice-assisted content discovery.",
+    "Unified streaming platform search, catalogue exploration, and voice-assisted content discovery across Netflix, Prime Video, Disney+, Max, Apple TV+, and more.",
 };
 
 export const viewport: Viewport = {

@@ -232,6 +232,16 @@ export function VoiceSearchModal({
     handleClose();
   };
 
+  const handleExampleClick = (queryText: string) => {
+    if (onApplyResults) {
+      onApplyResults(queryText, {
+        cleaned_query: queryText,
+        intent: "search",
+      });
+    }
+    handleClose();
+  };
+
   if (!isOpen) return null;
 
   const formatSeconds = (sec: number) => {
@@ -266,19 +276,19 @@ export function VoiceSearchModal({
         </button>
 
         {/* Header */}
-        <div className="flex items-center gap-2 mb-6">
-          <div className="p-2 rounded-xl bg-purple-600/20 border border-purple-500/30 text-purple-400">
+        <div className="flex items-start gap-2.5 mb-6 pr-8">
+          <div className="p-2 rounded-xl bg-purple-600/20 border border-purple-500/30 text-purple-400 shrink-0 mt-0.5">
             <Mic className="size-5" />
           </div>
-          <div>
-            <h2 className="text-lg font-bold text-white flex items-center gap-2">
-              Voice Assisted Search
+          <div className="min-w-0 flex-1">
+            <h2 className="text-base sm:text-lg font-bold text-white flex items-center flex-wrap gap-2">
+              <span>Voice Assisted Search</span>
               <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-purple-500/20 text-purple-300 border border-purple-500/30">
                 AI Powered
               </span>
             </h2>
-            <p className="text-xs text-zinc-400">
-              Speak naturally in any phrasing — AI extracts title, genres, and platforms
+            <p className="text-xs text-zinc-400 mt-0.5">
+              Speak naturally — AI extracts title, genres, and platforms
             </p>
           </div>
         </div>
@@ -312,12 +322,14 @@ export function VoiceSearchModal({
                 </p>
                 <div className="flex flex-wrap gap-1.5 justify-center">
                   {EXAMPLE_QUERIES.map((example) => (
-                    <span
+                    <button
                       key={example}
-                      className="text-xs px-2.5 py-1 rounded-lg bg-white/5 border border-white/10 text-zinc-300"
+                      type="button"
+                      onClick={() => handleExampleClick(example)}
+                      className="text-xs px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 hover:border-purple-500/40 border border-white/10 text-zinc-300 hover:text-white transition-all cursor-pointer"
                     >
                       &ldquo;{example}&rdquo;
-                    </span>
+                    </button>
                   ))}
                 </div>
               </div>

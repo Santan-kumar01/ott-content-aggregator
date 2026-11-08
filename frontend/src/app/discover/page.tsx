@@ -58,9 +58,26 @@ function DiscoverContent() {
   const [showFiltersMobile, setShowFiltersMobile] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const [isFallbackMode, setIsFallbackMode] = useState(false);
-  const [isVoiceModalOpen, setIsVoiceModalOpen] = useState(
-    searchParams.get("voice") === "true"
-  );
+  const isVoiceParam = searchParams.get("voice") === "true";
+  const [isVoiceModalOpen, setIsVoiceModalOpen] = useState(isVoiceParam);
+  const [prevVoiceParam, setPrevVoiceParam] = useState(isVoiceParam);
+
+  if (isVoiceParam !== prevVoiceParam) {
+    setPrevVoiceParam(isVoiceParam);
+    if (isVoiceParam) {
+      setIsVoiceModalOpen(true);
+    }
+  }
+
+  const handleCloseVoiceModal = useCallback(() => {
+    setIsVoiceModalOpen(false);
+    if (searchParams.get("voice")) {
+      const params = new URLSearchParams(searchParams.toString());
+      params.delete("voice");
+      const query = params.toString();
+      router.replace(`/discover${query ? `?${query}` : ""}`, { scroll: false });
+    }
+  }, [router, searchParams]);
 
   // Sync state to URL search parameters
   const updateUrlParams = useCallback(
@@ -355,7 +372,7 @@ function DiscoverContent() {
         {/* Voice Assisted Search Modal */}
         <VoiceSearchModal
           isOpen={isVoiceModalOpen}
-          onClose={() => setIsVoiceModalOpen(false)}
+          onClose={handleCloseVoiceModal}
           onApplyResults={handleApplyVoiceResults}
         />
       </main>

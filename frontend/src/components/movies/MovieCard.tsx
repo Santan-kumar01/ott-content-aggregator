@@ -141,7 +141,8 @@ export function MovieCard({
       {/* Clickable Card Area leading to details */}
       <Link
         href={`/titles/${id}`}
-        className="block relative aspect-[2/3] w-full overflow-hidden bg-zinc-950 focus:outline-none"
+        aria-label={`View details for ${title} (${releaseYear})`}
+        className="block relative aspect-[2/3] w-full overflow-hidden bg-zinc-950 focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500 focus-visible:ring-inset"
       >
         {effectivePoster && !imageError ? (
           <Image
@@ -250,7 +251,10 @@ export function MovieCard({
             </span>
           </div>
 
-          <Link href={`/titles/${id}`} className="group-hover:text-purple-300 transition-colors">
+          <Link
+            href={`/titles/${id}`}
+            className="group-hover:text-purple-300 transition-colors focus:outline-none focus-visible:underline"
+          >
             <h4
               className="text-sm font-semibold text-white tracking-tight line-clamp-1"
               title={title}
