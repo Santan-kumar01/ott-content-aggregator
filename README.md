@@ -475,6 +475,7 @@ Similarly, updating (`PATCH /api/v1/titles/{id}`) and deleting (`DELETE /api/v1/
 | `POST` | `/api/v1/voice/search` | Public | End-to-end voice catalog search (audio upload -> transcription -> query parsing -> catalog search) |
 | `GET` | `/api/v1/titles/` | Public | List and filter titles (Redis-cached) |
 | `GET` | `/api/v1/titles/paginated` | Public | Search, filter, sort, and paginate titles with pagination metadata (Redis-cached) |
+| `GET` | `/api/v1/titles/facets` | Public | Get genre and platform counts for catalog filter controls |
 | `GET` | `/api/v1/titles/{id}` | Public | Retrieve a title by ID (Redis-cached) |
 | `POST` | `/api/v1/titles/` | Protected | Create a new title |
 | `PATCH` | `/api/v1/titles/{id}` | Protected | Update an existing title (Partial update) |
@@ -489,13 +490,17 @@ Both `GET /api/v1/titles/` and `GET /api/v1/titles/paginated` accept query param
 | Parameter | Type | Validation / Allowed Values | Description |
 |---|---|---|---|
 | `search` | Query (string) | Length: 1–200 characters | Case-insensitive partial match in title `name` or `description`. SQL wildcards (`%`, `_`, `\`) are safely escaped. |
-| `genre` | Query (string) | Case-insensitive | Filters titles by exact genre name. |
-| `platform` | Query (string) | Case-insensitive | Filters titles by exact streaming platform name. |
+| `genre` | Query (string, repeatable) | Case-insensitive | Filters titles by any listed exact genre name. |
+| `platform` | Query (string, repeatable) | Case-insensitive | Filters titles by any listed exact streaming platform name. |
 | `release_year` | Query (int) | Between 1888 and 2100 | Filters titles by release year. |
+| `release_year_from`, `release_year_to` | Query (int) | Each between 1888 and 2100 | Inclusive release-year range; start must not exceed end. |
+| `content_type` | Query (string) | `movie`, `show` | Filters titles by content type. |
 | `sort_by` | Query (string) | `name`, `release_year`, `created_at` | Field to sort by. Defaults to insertion order (`id`) if omitted. Uses `id` ascending as deterministic tiebreaker. |
 | `sort_order` | Query (string) | `asc`, `desc` (default: `asc`) | Sort direction. |
 | `skip` | Query (int) | `>= 0` (default: `0`) | Number of matching titles to skip. |
 | `limit` | Query (int) | `1` to `100` (default: `20`) | Maximum number of titles to return. |
+
+Repeated genre and platform values match any selected value within that field; different filters combine. `release_year` may be combined with the inclusive range.
 
 #### Paginated Response Format (`GET /api/v1/titles/paginated`)
 

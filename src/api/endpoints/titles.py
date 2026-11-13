@@ -18,7 +18,13 @@ from src.core.database import get_db
 from src.models.user import User
 from src.schemas.error import ErrorResponse
 from src.schemas.sync import SyncRequest, SyncTaskResponse, SyncTaskStatus
-from src.schemas.title import PaginatedTitleRead, TitleCreate, TitleRead, TitleUpdate
+from src.schemas.title import (
+    PaginatedTitleRead,
+    TitleCreate,
+    TitleFacetsRead,
+    TitleRead,
+    TitleUpdate,
+)
 from src.services import cache_service, catalog_service
 from src.services.background_tasks import (
     get_background_task_status,
@@ -74,10 +80,13 @@ async def create_title(
 
 
 def _title_query_parameters(
-    genre: str | None = None,
-    platform: str | None = None,
+    genre: list[str] | None = None,
+    platform: list[str] | None = None,
     search: str | None = None,
     release_year: int | None = None,
+    release_year_from: int | None = None,
+    release_year_to: int | None = None,
+    content_type: Literal["movie", "show"] | None = None,
     sort_by: Literal["name", "release_year", "created_at"] | None = None,
     sort_order: Literal["asc", "desc"] = "asc",
     skip: int = 0,
@@ -88,6 +97,9 @@ def _title_query_parameters(
         "platform": platform,
         "search": search,
         "release_year": release_year,
+        "release_year_from": release_year_from,
+        "release_year_to": release_year_to,
+        "content_type": content_type,
         "sort_by": sort_by,
         "sort_order": sort_order,
         "skip": skip,
@@ -107,8 +119,8 @@ def _title_query_parameters(
 )
 async def list_titles(
     db: DBSession,
-    genre: str | None = Query(default=None),
-    platform: str | None = Query(default=None),
+    genre: list[str] | None = Query(default=None),
+    platform: list[str] | None = Query(default=None),
     search: str | None = Query(
         default=None,
         min_length=1,
@@ -116,6 +128,9 @@ async def list_titles(
         description="Case-insensitive partial match against the title name.",
     ),
     release_year: int | None = Query(default=None, ge=1888, le=2100),
+    release_year_from: int | None = Query(default=None, ge=1888, le=2100),
+    release_year_to: int | None = Query(default=None, ge=1888, le=2100),
+    content_type: Literal["movie", "show"] | None = Query(default=None),
     sort_by: Literal["name", "release_year", "created_at"] | None = Query(
         default=None
     ),
@@ -123,8 +138,19 @@ async def list_titles(
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=20, ge=1, le=100),
 ):
+    _validate_release_year_range(release_year_from, release_year_to)
     params = _title_query_parameters(
-        genre, platform, search, release_year, sort_by, sort_order, skip, limit
+        genre=genre,
+        platform=platform,
+        search=search,
+        release_year=release_year,
+        release_year_from=release_year_from,
+        release_year_to=release_year_to,
+        content_type=content_type,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        skip=skip,
+        limit=limit,
     )
     async def load_titles():
         titles = await catalog_service.list_titles(db, **params)
@@ -153,8 +179,8 @@ async def list_titles(
 )
 async def list_titles_paginated(
     db: DBSession,
-    genre: str | None = Query(default=None),
-    platform: str | None = Query(default=None),
+    genre: list[str] | None = Query(default=None),
+    platform: list[str] | None = Query(default=None),
     search: str | None = Query(
         default=None,
         min_length=1,
@@ -162,6 +188,9 @@ async def list_titles_paginated(
         description="Case-insensitive partial match against the title name.",
     ),
     release_year: int | None = Query(default=None, ge=1888, le=2100),
+    release_year_from: int | None = Query(default=None, ge=1888, le=2100),
+    release_year_to: int | None = Query(default=None, ge=1888, le=2100),
+    content_type: Literal["movie", "show"] | None = Query(default=None),
     sort_by: Literal["name", "release_year", "created_at"] | None = Query(
         default=None
     ),
@@ -169,8 +198,19 @@ async def list_titles_paginated(
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=20, ge=1, le=100),
 ):
+    _validate_release_year_range(release_year_from, release_year_to)
     params = _title_query_parameters(
-        genre, platform, search, release_year, sort_by, sort_order, skip, limit
+        genre=genre,
+        platform=platform,
+        search=search,
+        release_year=release_year,
+        release_year_from=release_year_from,
+        release_year_to=release_year_to,
+        content_type=content_type,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        skip=skip,
+        limit=limit,
     )
     async def load_paginated():
         items, total = await catalog_service.list_titles_paginated(db, **params)
@@ -192,6 +232,34 @@ async def list_titles_paginated(
         cache_setter=lambda data: cache_service.set_catalog_paginated(
             data=data, **params
         ),
+    )
+
+
+@router.get(
+    "/facets",
+    response_model=TitleFacetsRead,
+    summary="Get catalog filter facets",
+)
+async def list_title_facets(
+    db: DBSession,
+    genre: list[str] | None = Query(default=None),
+    platform: list[str] | None = Query(default=None),
+    search: str | None = Query(default=None, min_length=1, max_length=200),
+    release_year: int | None = Query(default=None, ge=1888, le=2100),
+    release_year_from: int | None = Query(default=None, ge=1888, le=2100),
+    release_year_to: int | None = Query(default=None, ge=1888, le=2100),
+    content_type: Literal["movie", "show"] | None = Query(default=None),
+):
+    _validate_release_year_range(release_year_from, release_year_to)
+    return await catalog_service.list_title_facets(
+        db,
+        search=search,
+        genre=genre,
+        platform=platform,
+        release_year=release_year,
+        release_year_from=release_year_from,
+        release_year_to=release_year_to,
+        content_type=content_type,
     )
 
 

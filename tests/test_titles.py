@@ -1120,3 +1120,164 @@ async def test_paginated_title_search_normalizes_whitespace_and_escapes_literals
     assert sorted(title["name"] for title in data["items"]) == sorted(
         expected_names
     )
+
+
+@pytest.mark.anyio
+async def test_catalog_filters_by_content_type_and_inclusive_year_range(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+):
+    titles = [
+        ("Movie at start", "movie", 2018),
+        ("Movie at end", "movie", 2020),
+        ("Show in range", "show", 2019),
+        ("Movie outside range", "movie", 2021),
+    ]
+    for name, content_type, release_year in titles:
+        response = await client.post(
+            "/api/v1/titles",
+            json={
+                "name": name,
+                "description": "Catalog filter test",
+                "content_type": content_type,
+                "release_year": release_year,
+                "genre": "Drama",
+                "platform": "Netflix",
+            },
+            headers=auth_headers,
+        )
+        assert response.status_code == 201, response.text
+
+    response = await client.get(
+        "/api/v1/titles/paginated",
+        params={
+            "content_type": "movie",
+            "release_year_from": 2018,
+            "release_year_to": 2020,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["total"] == 2
+    assert {title["name"] for title in data["items"]} == {
+        "Movie at start",
+        "Movie at end",
+    }
+
+
+@pytest.mark.anyio
+async def test_catalog_filters_accept_multiple_genres_and_platforms(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+):
+    titles = [
+        ("Drama Netflix", "Drama", "Netflix"),
+        ("Comedy Netflix", "Comedy", "Netflix"),
+        ("Drama Prime", "Drama", "Prime Video"),
+        ("Horror Netflix", "Horror", "Netflix"),
+        ("Drama Other", "Drama", "Other Platform"),
+    ]
+    for name, genre, platform in titles:
+        response = await client.post(
+            "/api/v1/titles",
+            json={
+                "name": name,
+                "description": "Multi-value filter test",
+                "content_type": "movie",
+                "release_year": 2024,
+                "genre": genre,
+                "platform": platform,
+            },
+            headers=auth_headers,
+        )
+        assert response.status_code == 201, response.text
+
+    response = await client.get(
+        "/api/v1/titles/paginated",
+        params=[
+            ("genre", "Drama"),
+            ("genre", "Comedy"),
+            ("platform", "Netflix"),
+            ("platform", "Prime Video"),
+        ],
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["total"] == 3
+    assert {title["name"] for title in data["items"]} == {
+        "Drama Netflix",
+        "Comedy Netflix",
+        "Drama Prime",
+    }
+
+
+@pytest.mark.anyio
+async def test_catalog_facets_exclude_their_own_filter(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+):
+    titles = [
+        ("Drama Netflix", "Drama", "Netflix", 2020),
+        ("Comedy Netflix", "Comedy", "Netflix", 2021),
+        ("Drama Prime", "Drama", "Prime Video", 2022),
+        ("Drama Show", "Drama", "Netflix", 2020),
+    ]
+    for name, genre, platform, release_year in titles:
+        content_type = "show" if name == "Drama Show" else "movie"
+        response = await client.post(
+            "/api/v1/titles",
+            json={
+                "name": name,
+                "description": "Facet count test",
+                "content_type": content_type,
+                "release_year": release_year,
+                "genre": genre,
+                "platform": platform,
+            },
+            headers=auth_headers,
+        )
+        assert response.status_code == 201, response.text
+
+    response = await client.get(
+        "/api/v1/titles/facets",
+        params=[
+            ("genre", "Drama"),
+            ("platform", "Netflix"),
+            ("content_type", "movie"),
+            ("release_year_from", 2020),
+            ("release_year_to", 2022),
+        ],
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "genres": [
+            {"value": "Comedy", "count": 1},
+            {"value": "Drama", "count": 1},
+        ],
+        "platforms": [
+            {"value": "Netflix", "count": 1},
+            {"value": "Prime Video", "count": 1},
+        ],
+    }
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "query",
+    [
+        "content_type=documentary",
+        "release_year_from=2021&release_year_to=2020",
+        "release_year_from=1887",
+        "release_year_to=2101",
+    ],
+)
+async def test_catalog_rejects_invalid_additional_filters(
+    client: AsyncClient,
+    query: str,
+):
+    response = await client.get(f"/api/v1/titles/paginated?{query}")
+
+    assert response.status_code == 422
