@@ -813,6 +813,19 @@ python scratch/benchmark_catalog.py
 ```
 Benchmark metrics are exported in structured JSON format to `scratch/benchmark_results.json`.
 
+#### Catalog Facets
+
+`GET /api/v1/titles/facets` accepts the search and catalog filters above and returns genre and platform counts to populate filter controls:
+
+```json
+{
+  "genres": [{"value": "Drama", "count": 12}],
+  "platforms": [{"value": "Netflix", "count": 8}]
+}
+```
+
+Facet counts are disjunctive: genre counts apply the other filters but ignore selected `genre` values, while platform counts apply the other filters but ignore selected `platform` values. This lets clients show alternative options alongside the current selections.
+
 ---
 
 ## Running Tests

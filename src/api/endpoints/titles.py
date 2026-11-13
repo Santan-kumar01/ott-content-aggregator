@@ -32,6 +32,21 @@ DBSession = Annotated[AsyncSession, Depends(get_db)]
 CurrentUser = Annotated[User, Depends(get_current_user)]
 
 
+def _validate_release_year_range(
+    release_year_from: int | None,
+    release_year_to: int | None,
+) -> None:
+    if (
+        release_year_from is not None
+        and release_year_to is not None
+        and release_year_from > release_year_to
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="release_year_from must be less than or equal to release_year_to",
+        )
+
+
 @router.post(
     "",
     response_model=TitleRead,
