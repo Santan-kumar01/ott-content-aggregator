@@ -53,3 +53,13 @@ class PaginatedTitleRead(BaseModel):
     skip: int
     limit: int
     has_next: bool
+
+
+class TitleFacetCount(BaseModel):
+    value: str
+    count: int
+
+
+class TitleFacetsRead(BaseModel):
+    genres: list[TitleFacetCount]
+    platforms: list[TitleFacetCount]

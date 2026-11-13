@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 import logging
+from collections.abc import Sequence
 from typing import Any, Awaitable, Callable
 
 from src.core.cache import (
@@ -22,11 +23,24 @@ CATALOG_GENERATION_KEY = "catalog:generation"
 DEFAULT_GENERATION = 1
 
 
+def _normalize_filter_values(
+    values: str | Sequence[str] | None,
+) -> list[str] | None:
+    if not values:
+        return None
+    if isinstance(values, str):
+        values = [values]
+    return sorted({value.strip().lower() for value in values})
+
+
 def build_catalog_params_hash(
-    genre: str | None = None,
-    platform: str | None = None,
+    genre: str | Sequence[str] | None = None,
+    platform: str | Sequence[str] | None = None,
     search: str | None = None,
     release_year: int | None = None,
+    release_year_from: int | None = None,
+    release_year_to: int | None = None,
+    content_type: str | None = None,
     sort_by: str | None = None,
     sort_order: str = "asc",
     skip: int = 0,
@@ -38,10 +52,13 @@ def build_catalog_params_hash(
     while variations in filters, sorting, search, or pagination produce distinct keys.
     """
     canonical_dict = {
-        "genre": genre.strip().lower() if genre else None,
+        "genre": _normalize_filter_values(genre),
         "limit": limit,
-        "platform": platform.strip().lower() if platform else None,
+        "platform": _normalize_filter_values(platform),
         "release_year": release_year,
+        "release_year_from": release_year_from,
+        "release_year_to": release_year_to,
+        "content_type": content_type.strip().lower() if content_type else None,
         "search": search.strip().lower() if search else None,
         "skip": skip,
         "sort_by": sort_by.strip().lower() if sort_by else None,
@@ -101,10 +118,13 @@ def get_ttl() -> int:
 
 
 async def get_catalog_list(
-    genre: str | None = None,
-    platform: str | None = None,
+    genre: str | Sequence[str] | None = None,
+    platform: str | Sequence[str] | None = None,
     search: str | None = None,
     release_year: int | None = None,
+    release_year_from: int | None = None,
+    release_year_to: int | None = None,
+    content_type: str | None = None,
     sort_by: str | None = None,
     sort_order: str = "asc",
     skip: int = 0,
@@ -120,6 +140,9 @@ async def get_catalog_list(
         platform=platform,
         search=search,
         release_year=release_year,
+        release_year_from=release_year_from,
+        release_year_to=release_year_to,
+        content_type=content_type,
         sort_by=sort_by,
         sort_order=sort_order,
         skip=skip,
@@ -142,10 +165,13 @@ async def get_catalog_list(
 
 async def set_catalog_list(
     data: list[dict[str, Any]],
-    genre: str | None = None,
-    platform: str | None = None,
+    genre: str | Sequence[str] | None = None,
+    platform: str | Sequence[str] | None = None,
     search: str | None = None,
     release_year: int | None = None,
+    release_year_from: int | None = None,
+    release_year_to: int | None = None,
+    content_type: str | None = None,
     sort_by: str | None = None,
     sort_order: str = "asc",
     skip: int = 0,
@@ -161,6 +187,9 @@ async def set_catalog_list(
         platform=platform,
         search=search,
         release_year=release_year,
+        release_year_from=release_year_from,
+        release_year_to=release_year_to,
+        content_type=content_type,
         sort_by=sort_by,
         sort_order=sort_order,
         skip=skip,
@@ -178,10 +207,13 @@ async def set_catalog_list(
 
 
 async def get_catalog_paginated(
-    genre: str | None = None,
-    platform: str | None = None,
+    genre: str | Sequence[str] | None = None,
+    platform: str | Sequence[str] | None = None,
     search: str | None = None,
     release_year: int | None = None,
+    release_year_from: int | None = None,
+    release_year_to: int | None = None,
+    content_type: str | None = None,
     sort_by: str | None = None,
     sort_order: str = "asc",
     skip: int = 0,
@@ -197,6 +229,9 @@ async def get_catalog_paginated(
         platform=platform,
         search=search,
         release_year=release_year,
+        release_year_from=release_year_from,
+        release_year_to=release_year_to,
+        content_type=content_type,
         sort_by=sort_by,
         sort_order=sort_order,
         skip=skip,
@@ -219,10 +254,13 @@ async def get_catalog_paginated(
 
 async def set_catalog_paginated(
     data: dict[str, Any],
-    genre: str | None = None,
-    platform: str | None = None,
+    genre: str | Sequence[str] | None = None,
+    platform: str | Sequence[str] | None = None,
     search: str | None = None,
     release_year: int | None = None,
+    release_year_from: int | None = None,
+    release_year_to: int | None = None,
+    content_type: str | None = None,
     sort_by: str | None = None,
     sort_order: str = "asc",
     skip: int = 0,
@@ -238,6 +276,9 @@ async def set_catalog_paginated(
         platform=platform,
         search=search,
         release_year=release_year,
+        release_year_from=release_year_from,
+        release_year_to=release_year_to,
+        content_type=content_type,
         sort_by=sort_by,
         sort_order=sort_order,
         skip=skip,

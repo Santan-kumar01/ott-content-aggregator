@@ -153,6 +153,33 @@ def test_cache_key_sensitivity_to_each_parameter():
     assert diff_limit != base
 
 
+def test_cache_key_normalizes_multi_value_and_additional_filters():
+    first = build_catalog_params_hash(
+        genre=["Drama", "Comedy"],
+        platform=["Netflix", "Prime Video"],
+        content_type="movie",
+        release_year_from=2018,
+        release_year_to=2022,
+    )
+    reordered = build_catalog_params_hash(
+        genre=[" comedy ", "DRAMA"],
+        platform=["prime video", "netflix"],
+        content_type="MOVIE",
+        release_year_from=2018,
+        release_year_to=2022,
+    )
+    different_range = build_catalog_params_hash(
+        genre=["Drama", "Comedy"],
+        platform=["Netflix", "Prime Video"],
+        content_type="movie",
+        release_year_from=2019,
+        release_year_to=2022,
+    )
+
+    assert first == reordered
+    assert first != different_range
+
+
 # ===========================================================================
 # 3. REDIS OUTAGE TOLERANCE & FALLBACK TESTS (MOCK / UNIT)
 # ===========================================================================
